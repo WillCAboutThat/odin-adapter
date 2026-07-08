@@ -7,7 +7,7 @@
     {
       "name": "odin",
       "source": "./odin",
-      "description": "Odin / Muninn — turn documents into a durable, provenance-tracked knowledge base. Bundles the Odin skill (judgment) + the neutral Core MCP server (deterministic, invariant-guaranteeing ops)."
+      "description": "Odin / Muninn — durable, provenance-tracked knowledge base (skill + neutral Core MCP server)."
     }
   ]
 }
