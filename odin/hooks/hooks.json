@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/ensure_deps.py\" \"${CLAUDE_PLUGIN_DATA}/site\""
+          }
+        ]
+      }
+    ]
+  }
+}

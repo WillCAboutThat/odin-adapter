@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "odin-core": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/tools/odin_mcp.py"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "env": {
+        "ODIN_DEP_DIR": "${CLAUDE_PLUGIN_DATA}/site"
+      }
+    }
+  }
+}

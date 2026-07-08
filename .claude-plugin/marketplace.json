@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "odin-claude",
+  "description": "Distribution channel for the Odin / Muninn knowledge-base plugin (Claude Code).",
+  "owner": { "name": "Will Carlson" },
+  "plugins": [
+    {
+      "name": "odin",
+      "source": "./odin",
+      "description": "Odin / Muninn — turn documents into a durable, provenance-tracked knowledge base. Bundles the Odin skill (judgment) + the neutral Core MCP server (deterministic, invariant-guaranteeing ops)."
+    }
+  ]
+}
