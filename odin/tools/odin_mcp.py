@@ -44,6 +44,7 @@ if _DEP_DIR:
     sys.path.insert(0, _DEP_DIR)
 import muninn_core as core  # noqa: E402
 import muninn_lint  # noqa: E402
+import muninn_semantic as semantic  # noqa: E402  (the disposable semantic tier, T-087)
 
 SERVER_NAME = "odin-core"
 SERVER_VERSION = core.FORMAT_VERSION
@@ -222,6 +223,62 @@ TOOLS = [
                        "that makes the MCP transport safe (ADR-0022 §2).",
         "inputSchema": _obj({"root": _ROOT}, required=["root"]),
     },
+    {
+        "name": "odin_reindex",
+        "description": "(Re)build the DISPOSABLE semantic vector sidecar "
+                       "(.odin/semantic.db) from the derived layer via a local "
+                       "embedding model (T-087, ADR-0027). Inference, NOT a Core "
+                       "transform — it only accelerates retrieval, never grounds "
+                       "(ADR-0008 boundary). Incremental (re-embeds only changed "
+                       "docs), prunes deleted docs, and rebuilds on a model change. "
+                       "Run after ingest to keep `odin_search` fresh; safe to delete "
+                       "the sidecar anytime — this rebuilds it. Needs a reachable "
+                       "Ollama (ODIN_OLLAMA_URL); returns counts, never touches the base.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "model": {"type": "string", "description": "Embedding model (default nomic-embed-text / ODIN_EMBED_MODEL)."},
+            "url": {"type": "string", "description": "Ollama base URL (default ODIN_OLLAMA_URL or http://localhost:11434)."},
+        }, required=["root"]),
+    },
+    {
+        "name": "odin_search",
+        "description": "Semantic retrieval: top-k derived docs by cosine similarity "
+                       "to the query, over the disposable embedding sidecar (T-087). "
+                       "The AI-facing companion to the AI-free `odin_find` floor — it "
+                       "crosses the reader-vocabulary gap find cannot (e.g. "
+                       "'illness'->the vet exam; ADR-0014, T-044). It only PROPOSES "
+                       "candidates (ADR-0027 §2): each hit is a doc to READ, never a "
+                       "citation, never provenance — ground answers in the actual "
+                       "sources. Empty until `odin_reindex` has run. Prefer `odin_find` "
+                       "when the query is a literal token; reach here for meaning/synonyms.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "query": {"type": "string", "description": "A natural-language / concept query (meaning, not just tokens)."},
+            "k": {"type": "integer", "description": "How many candidates to propose (default 10)."},
+            "model": {"type": "string", "description": "Override the query model; the index's own model still wins for coherence."},
+            "url": {"type": "string", "description": "Ollama base URL (default ODIN_OLLAMA_URL or http://localhost:11434)."},
+        }, required=["root", "query"]),
+    },
+    {
+        "name": "odin_retrieve",
+        "description": "Unified retrieval — the DEFAULT way to find things: unions "
+                       "semantic candidates (meaning) with `find` hits (literal), "
+                       "deduped, so you never miss a synonym OR an exact token. It "
+                       "ALWAYS answers and never errors on a down backend: the "
+                       "fallback to the AI-free `find` floor is MECHANICAL (inside "
+                       "the call), so it can't be forgotten. Transparent about it — "
+                       "the result's `via`/`backend` say whether semantics ran or it "
+                       "degraded to find (Ollama down / no index). Still proposes only "
+                       "(ADR-0027 §2); read the sources to ground. Prefer this over "
+                       "`odin_search`/`odin_find` unless you specifically want just one.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "query": {"type": "string", "description": "A natural-language or literal query — both retrievers run."},
+            "k": {"type": "integer", "description": "Semantic candidates to union in (default 10); find hits are added whole."},
+            "model": {"type": "string", "description": "Override the query model; the index's own model still wins for coherence."},
+            "url": {"type": "string", "description": "Ollama base URL (default ODIN_OLLAMA_URL or http://localhost:11434)."},
+        }, required=["root", "query"]),
+    },
 ]
 
 _TOOL_NAMES = {t["name"] for t in TOOLS}
@@ -292,6 +349,15 @@ _DISPATCH = {
         amend=bool(p.get("amend")), when=core._now()),
     "odin_fingerprint": lambda root, p: core.fingerprint(root),
     "odin_lint": lambda root, p: _lint(root),
+    "odin_reindex": lambda root, p: semantic.reindex(
+        root, model=p.get("model") or semantic.DEFAULT_MODEL,
+        url=p.get("url") or semantic.DEFAULT_URL),
+    "odin_search": lambda root, p: semantic.search(
+        root, p["query"], k=p.get("k", 10), model=p.get("model"),
+        url=p.get("url") or semantic.DEFAULT_URL),
+    "odin_retrieve": lambda root, p: semantic.retrieve(
+        root, p["query"], k=p.get("k", 10), model=p.get("model"),
+        url=p.get("url") or semantic.DEFAULT_URL),
 }
 
 
@@ -307,6 +373,34 @@ def dispatch(op, params):
     if root is None:
         raise ValueError("every op needs `root` (the Muninn directory)")
     return _DISPATCH[op](root, params)
+
+
+def _note_usage(op, params):
+    """Record the byte-footprint of a write op to the disposable usage ledger
+    (ADR-0027) — the MCP transport's equivalent of the CLI `main()` hook, so the
+    plugin path measures usage too. Best-effort; never affects the result and is
+    kept OUT of `dispatch()` so that stays pure (the ADR-0022 equality test)."""
+    try:
+        root = (params or {}).get("root")
+        if root is None:
+            return
+        if op == "odin_capture":
+            body = params.get("body")
+            if body is not None:
+                n = len(body.encode("utf-8"))
+            elif params.get("source_file"):
+                n = Path(params["source_file"]).stat().st_size
+            else:
+                n = 0
+            core.log_usage(root, "capture", bytes_out=n, id=params.get("id"))
+        elif op == "odin_derive":
+            srcs = params.get("sources") or []
+            core.log_usage(root, "derive",
+                           bytes_in=sum(core._source_bytes(root, s) for s in srcs),
+                           bytes_out=len((params.get("body") or "").encode("utf-8")),
+                           id=params.get("id"), type=params.get("type", "summary"))
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -360,6 +454,7 @@ def handle_message(msg):
                              "text": f"{type(exc).__name__}: {exc}"}],
                 "isError": True,
             })
+        _note_usage(name, arguments)  # disposable usage ledger (ADR-0027); best-effort
         text = json.dumps(out, ensure_ascii=False, default=str)
         return _result(mid, {
             "content": [{"type": "text", "text": text}],

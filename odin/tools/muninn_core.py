@@ -9,6 +9,7 @@ its output must always leave the Muninn conformant (the linter is the check).
 follow.
 """
 import argparse
+import json
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -52,6 +53,69 @@ def _append_log(root: Path, when: str, line: str) -> None:
     if not prev.endswith("\n"):
         prev += "\n"
     logp.write_text(prev + f"## [{when}] {line}\n", encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# Usage ledger — the first deterministic tenant of the disposable-index tier
+# (ADR-0027). A byte-footprint proxy for the token cost of AI-heavy operations,
+# recorded in a git-ignored `.odin/usage.jsonl`. It is operational state, not
+# knowledge: never a source, never fingerprinted/linted, and disposable.
+# --------------------------------------------------------------------------- #
+def _source_bytes(root, sid) -> int:
+    """Bytes of a source's current text (its `source-text.md` aid, else the
+    current canonical file) — a proxy for how much an adapter reads to derive
+    from it. Missing/opaque sources count as 0. Never raises for a bad id."""
+    d = Path(root) / "sources" / sid
+    if not d.is_dir():
+        return 0
+    aid = d / "source-text.md"
+    if aid.exists():
+        return aid.stat().st_size
+    cands = [p for p in d.glob("source.*")
+             if p.is_file() and not p.name.startswith("source.v")]
+    return max((p.stat().st_size for p in cands), default=0)
+
+
+def log_usage(root, op, *, bytes_in=0, bytes_out=0, **extra) -> None:
+    """Append one usage record to `<root>/.odin/usage.jsonl` (ADR-0027).
+
+    Best-effort by design: usage accounting must never break the operation it
+    measures, so every failure is swallowed. `.odin/` is disposable operational
+    state — git-ignored, excluded from lint and the fingerprint."""
+    try:
+        d = Path(root) / ".odin"
+        d.mkdir(exist_ok=True)
+        rec = {"ts": _now(), "op": str(op),
+               "bytes_in": int(bytes_in or 0), "bytes_out": int(bytes_out or 0)}
+        rec.update(extra)
+        with (d / "usage.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def usage_report(root) -> dict:
+    """Aggregate the usage ledger by op:
+    {total_ops, by_op: {op: {count, bytes_in, bytes_out}}}. Absent ledger → empty."""
+    out = {"total_ops": 0, "by_op": {}}
+    p = Path(root) / ".odin" / "usage.jsonl"
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        op = str(rec.get("op", "?"))
+        agg = out["by_op"].setdefault(op, {"count": 0, "bytes_in": 0, "bytes_out": 0})
+        agg["count"] += 1
+        agg["bytes_in"] += int(rec.get("bytes_in", 0) or 0)
+        agg["bytes_out"] += int(rec.get("bytes_out", 0) or 0)
+        out["total_ops"] += 1
+    return out
 
 
 def capture(root, id, body, *, origin, tier="full", capture_reason=None,
@@ -859,6 +923,11 @@ def init(root, name=None, when=None):
 
     (root / "index.md").write_text("# Index\n", encoding="utf-8")
     (root / "log.md").write_text("# Log\n", encoding="utf-8")
+    # The disposable-index tier is operational, never knowledge — keep it out of
+    # git (ADR-0027). Written only if the Muninn has no .gitignore of its own.
+    gi = root / ".gitignore"
+    if not gi.exists():
+        gi.write_text(".odin/\n", encoding="utf-8")
     _append_log(root, when, f"init | created Muninn '{name}' (format {FORMAT_VERSION})")
 
     # Seed the one canonical global view (ADR-0018): the always-in-scope home for
@@ -950,6 +1019,9 @@ def main(argv=None):
         sp = sub.add_parser(name, help=f"{name} the Muninn")
         sp.add_argument("root")
 
+    pu = sub.add_parser("usage", help="report the disposable usage ledger (ADR-0027)")
+    pu.add_argument("root")
+
     pfind = sub.add_parser("find", help="retrieve docs matching a query")
     pfind.add_argument("root")
     pfind.add_argument("query", nargs="*", help="query terms (omit to list all of --type)")
@@ -996,21 +1068,34 @@ def main(argv=None):
             origin["recoverable"] = args.recoverable
         if args.source_file:
             src = Path(args.source_file)
-            print(capture_file(args.root, args.id, src.read_bytes(),
-                               args.filename or src.name, origin=origin,
-                               tier=args.tier, capture_reason=args.reason, when=_now()))
+            raw = src.read_bytes()
+            res = capture_file(args.root, args.id, raw, args.filename or src.name,
+                               origin=origin, tier=args.tier,
+                               capture_reason=args.reason, when=_now())
+            log_usage(args.root, "capture", bytes_out=len(raw),
+                      id=args.id, action=res.get("action"))
+            print(res)
         else:
-            print(capture(args.root, args.id, _read_body(args), origin=origin,
-                          tier=args.tier, capture_reason=args.reason, when=_now()))
+            body = _read_body(args)
+            res = capture(args.root, args.id, body, origin=origin,
+                          tier=args.tier, capture_reason=args.reason, when=_now())
+            log_usage(args.root, "capture", bytes_out=len(body.encode("utf-8")),
+                      id=args.id, action=res.get("action"))
+            print(res)
     elif args.cmd == "dedup-check":
         print(dedup_check(args.root, id=args.id, source_file=args.source_file,
                           filename=args.filename, origin_ref=args.origin_ref))
     elif args.cmd == "source-status":
         print(source_status(args.root, args.id))
     elif args.cmd == "derive":
-        print(write_derived(args.root, args.id, body=_read_body(args), sources=args.sources,
+        body = _read_body(args)
+        res = write_derived(args.root, args.id, body=body, sources=args.sources,
                             type=args.type, title=args.title, abstract=args.abstract,
-                            derivation=args.derivation, derived_at=_now()))
+                            derivation=args.derivation, derived_at=_now())
+        log_usage(args.root, "derive",
+                  bytes_in=sum(_source_bytes(args.root, s) for s in args.sources),
+                  bytes_out=len(body.encode("utf-8")), id=args.id, type=args.type)
+        print(res)
     elif args.cmd == "project":
         print(write_project(args.root, args.id, title=args.title,
                             add_members=args.add_members, scope=args.scope,
@@ -1022,6 +1107,12 @@ def main(argv=None):
                               evidence=args.evidence, amend=args.amend, when=_now()))
     elif args.cmd == "index":
         print(regenerate_index(args.root))
+    elif args.cmd == "usage":
+        rep = usage_report(args.root)
+        for op, agg in sorted(rep["by_op"].items()):
+            print(f"{op:16} {agg['count']:>5}x  in={agg['bytes_in']:>10}  "
+                  f"out={agg['bytes_out']:>10}")
+        print(f"({rep['total_ops']} op(s) logged)")
     elif args.cmd == "fingerprint":
         print(fingerprint(args.root))
     elif args.cmd == "find":

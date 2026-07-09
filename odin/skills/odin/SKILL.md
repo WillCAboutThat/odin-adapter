@@ -24,7 +24,8 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
   `odin-core` **MCP server** is available (the plugin install ships it), drive the
   Core through its `odin_*` tools — `odin_init`, `odin_capture`, `odin_dedup_check`,
   `odin_source_status`, `odin_derive`, `odin_index`, `odin_find`, `odin_project`,
-  `odin_resolve`, `odin_record_decision`, `odin_fingerprint`, `odin_lint`. This is
+  `odin_resolve`, `odin_record_decision`, `odin_fingerprint`, `odin_lint`,
+  `odin_reindex`, `odin_search`, `odin_retrieve`. This is
   how a plugin install with **no checkout and no `pip install`** reaches the Core, so
   **prefer it**. They are the *same* ops with structured args: a body the CLI takes
   via `--file`/stdin becomes the **`body`** param, `--source-file` becomes the
@@ -157,6 +158,60 @@ base, read the index + summaries, then the sources (see `ask`); `find` is a chea
 pre-filter for that, and the way a human or a later tool gets in with no model at
 all. Its quality rides on summaries authored in the reader's vocabulary (Ingest
 step 3, ADR-0012) — improve the **summary**, never this matcher.
+
+## Search (semantic retrieval — proposes candidates, never grounds)
+
+`search` is the **AI-facing companion** to the `find` floor (ADR-0014, T-087): it
+ranks derived docs by **meaning**, so a reader's word crosses to the author's — e.g.
+`search <root> "illness"` surfaces the vet-exam summary that never says "illness",
+where `find` returns nothing. Prefer `odin_search` (MCP) or
+`python <ODIN>/tools/muninn_semantic.py search <root> "<query>"`; it returns scored
+candidates, best first.
+
+Two rules that keep it honest — it lives in the **disposable-index tier** (ADR-0027):
+
+- **It only *proposes*.** A hit is a doc to **read**, never a citation and never
+  provenance. Always ground the actual answer in the source bytes (see `ask`) — the
+  embedding index can rank a doc near a query it doesn't truly support. `find` stays
+  the AI-free floor; `search` never replaces it.
+- **Reach for it by task.** A literal token or id → `find`. Meaning, a synonym, "the
+  thing about…" → `search`. Use both and merge; they answer different questions.
+
+**Keep it fresh with `reindex`.** The vector store is a git-ignored, rebuildable
+`.odin/semantic.db` sidecar — **not** knowledge, and safe to delete. Run
+`odin_reindex` (or `muninn_semantic.py reindex <root>`) **after an `ingest`** so new
+docs are searchable; it re-embeds only what changed. It needs a reachable embedding
+backend (local Ollama via `ODIN_OLLAMA_URL`; see `docs/odin/ollama-setup.md`).
+
+**Degrade gracefully AND transparently when Ollama is off/unreachable.** The tier is
+optional; the base loses nothing without it. But *don't hide the degradation* (§I5):
+
+- **Backend down/unreachable** → `search`/`odin_search` returns a clear error
+  (`BackendUnavailable`, naming Ollama and the fallback), **not** a silent empty that
+  looks like "no matches." When you see it, **say so in one line** ("semantic search
+  is unavailable — Ollama isn't reachable; using `find` instead") and **run `find`**.
+  Never surface the raw error and never block. Same for `reindex`: report it couldn't
+  build and carry on — `find` still works.
+- **No index built yet** (nothing `reindex`ed) → a plain empty result. Offer to
+  `reindex` (if a backend is around) or just use `find`.
+- **Backend up, genuinely nothing similar** → a real empty result; treat it as "no
+  semantic match," and a literal `find` may still hit.
+
+## Retrieve (the default — semantic ∪ find, with a mechanical fallback)
+
+**Prefer `retrieve` / `odin_retrieve` as your default retrieval move**; reach for bare
+`find` or `search` only when you specifically want just one. It unions the two —
+semantic candidates (meaning) **and** `find` hits (literal), deduped and each tagged
+with its `source` — so you never miss a synonym *or* an exact token in one call.
+
+Its value over "call `search`, and if it errors call `find`" is that the fallback is
+**mechanical, not yours to remember**: `retrieve` never raises on a down backend and
+never returns a misleading empty — it degrades to `find` *inside the call*. It stays
+transparent: the result's **`via`** (`semantic+find` | `find`) and **`backend`**
+(`up` | `unavailable` | `no-index`) tell you whether semantics ran. When `via` is
+`find`, say so briefly ("semantic search is off — used `find`") and present the hits;
+they're the same trustworthy floor, just without the semantic lift. Still *proposes
+only* (ADR-0027 §2) — read the sources to ground.
 
 ## Why (a recorded decision + its rationale)
 

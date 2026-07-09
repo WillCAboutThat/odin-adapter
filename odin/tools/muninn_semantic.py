@@ -1,0 +1,462 @@
+"""Semantic retrieval tier (T-087) — the flagship tenant of the disposable-index
+tier (ADR-0027).
+
+This closes the reader-vocabulary gap that deterministic `find` cannot (T-044):
+`find('personality')` returns nothing when the doc says "temperament", because
+substring matching has no notion of meaning. Here we embed the **legible layer**
+(a derived doc's title + abstract + Covers/Answers facets + body) and rank
+candidates by cosine similarity, implementing the AI-facing retrieval tier that
+ADR-0014 already blessed.
+
+Two bright lines this module lives inside:
+
+  1. **It is not the Core.** Embedding is *inference*, not a faithful transform
+     (the Core boundary, ADR-0008): a model reads text and emits a vector — it can
+     drift, it is model-specific, it is not correct-by-construction. So this lives
+     OUTSIDE `muninn_core.py`, which stays inference-free. `find` remains the
+     AI-free floor; this is a separate, optional tier on top.
+
+  2. **The index only PROPOSES (ADR-0027 §2).** A search result is a *candidate to
+     read*, never a citation, never provenance, never written into the knowledge
+     layer. `ask`/`review` still ground in the actual source bytes. The vector
+     store is a git-ignored, rebuildable `.odin/semantic.db` sidecar — disposable
+     operational state, like the usage ledger. Delete it and nothing is lost;
+     `reindex` rebuilds it from the durable base.
+
+Backend: a local Ollama embedding model (e.g. `nomic-embed-text`), reached over
+HTTP with the Python stdlib — **zero new Python dependencies**. Cosine top-k is
+brute force in pure Python (personal scale is hundreds–thousands of docs, not
+millions; no vector DB needed). The embedder is injectable so tests run hermetically
+with no Ollama.
+
+The embedding model+version is config-provenance: **changing the model = a rebuild**
+(vectors from different models are not comparable), which `reindex` does automatically
+when it sees the model has changed.
+"""
+import argparse
+import array
+import hashlib
+import json
+import math
+import os
+import sqlite3
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import muninn_lint  # noqa: E402
+import muninn_core as core  # noqa: E402  (for `retrieve`'s deterministic find floor)
+from muninn_lint import Linter, split_frontmatter  # noqa: E402
+
+# Backend config — env-driven so nothing is hardcoded (see docs/odin/ollama-setup.md).
+DEFAULT_URL = os.environ.get("ODIN_OLLAMA_URL", "http://localhost:11434")
+DEFAULT_MODEL = os.environ.get("ODIN_EMBED_MODEL", "nomic-embed-text")
+
+
+class BackendUnavailable(RuntimeError):
+    """The embedding backend could not be reached or is misconfigured (Ollama down,
+    wrong URL, model not pulled). A *transparent, recoverable* signal — the whole
+    point of the disposable tier (ADR-0027): callers catch this and **degrade to the
+    AI-free `find` floor**, they do not crash and do not treat it as "no matches".
+    Distinct from a genuine empty result (which is a real, backend-up []).
+    """
+
+# The sidecar lives under the disposable `.odin/` tier (git-ignored by init).
+_DB_REL = (".odin", "semantic.db")
+
+
+# --------------------------------------------------------------------------- #
+# Embedding backend — Ollama over HTTP, stdlib only. Injectable for tests.
+# --------------------------------------------------------------------------- #
+def ollama_embed(texts, *, model=DEFAULT_MODEL, url=DEFAULT_URL, timeout=120):
+    """Embed a list of strings via a local Ollama `/api/embed`. Returns a list of
+    float vectors, one per input, in order.
+
+    Stdlib only (no `requests`, no `ollama` client). Raises on transport failure or
+    a malformed response — an empty index is better than a silently partial one, so
+    the caller sees the backend is down rather than getting zero results that look
+    like "nothing matched". The first call after idle can take ~30s while the model
+    pages into VRAM (that is `load_duration`, not a hang), hence the generous
+    default timeout.
+    """
+    if not texts:
+        return []
+    payload = json.dumps({"model": model, "input": list(texts)}).encode("utf-8")
+    req = urllib.request.Request(
+        url.rstrip("/") + "/api/embed",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    # A down/unreachable/misconfigured backend must surface as BackendUnavailable —
+    # a transparent, recoverable signal the caller degrades to `find` on — NOT a raw
+    # URLError that reads like a crash and hides the "just use find" recovery.
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:                 # reachable but errored
+        hint = (f" — is the model pulled?  `ollama pull {model}`"
+                if e.code == 404 else "")
+        raise BackendUnavailable(
+            f"embedding backend at {url} returned HTTP {e.code} (model {model!r}){hint}"
+        ) from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:  # unreachable/timeout
+        reason = getattr(e, "reason", e)
+        raise BackendUnavailable(
+            f"embedding backend not reachable at {url} ({reason}) — use deterministic "
+            f"`find` instead, or start Ollama / set ODIN_OLLAMA_URL "
+            f"(see docs/odin/ollama-setup.md)") from e
+    embs = data.get("embeddings")
+    if not embs or len(embs) != len(texts):
+        raise BackendUnavailable(
+            f"embedding backend at {url} returned {len(embs) if embs else 0} vectors "
+            f"for {len(texts)} inputs (model={model!r} — pulled and an *embedding* "
+            f"model, not a chat model?); falling back to `find` is safe")
+    return [[float(x) for x in v] for v in embs]
+
+
+# --------------------------------------------------------------------------- #
+# The legible layer — what we embed for a derived doc.
+# --------------------------------------------------------------------------- #
+def legible_text(doc) -> str:
+    """The retrieval-legible text of a derived doc: title + abstract + body (the
+    Covers/Answers facets live inside the body, so the body carries them). This is
+    the same enriched summary layer `find` searches and ADR-0012 invests in — we
+    embed exactly what a human skim or a reader-vocabulary query would land on.
+    """
+    parts = []
+    for key in ("title", "abstract"):
+        val = doc.data.get(key)
+        if val:
+            parts.append(str(val))
+    try:
+        _, body = split_frontmatter(doc.path.read_text(encoding="utf-8"))
+        if body.strip():
+            parts.append(body.strip())
+    except OSError:
+        pass
+    return "\n\n".join(parts)
+
+
+def _content_hash(text: str) -> str:
+    """A stable content hash of the legible text, so `reindex` re-embeds a doc only
+    when its legible layer actually changed (the vectors are keyed by it)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _derived_docs(root: Path):
+    """The derived (summary-layer) docs we embed, in id order. Sources are the
+    ground truth `ask` reads; the *legible* layer ADR-0012 enriches for findability
+    is the derived layer, so that is what the semantic tier ranks over."""
+    linter = Linter(root)
+    linter.load()
+    return sorted((d for d in linter.docs if d.kind == "derived"),
+                  key=lambda d: d.id)
+
+
+# --------------------------------------------------------------------------- #
+# The disposable sidecar store — a git-ignored SQLite `.odin/semantic.db`.
+# --------------------------------------------------------------------------- #
+def _vec_to_blob(vec) -> bytes:
+    return array.array("f", vec).tobytes()
+
+
+def _blob_to_vec(blob) -> array.array:
+    a = array.array("f")
+    a.frombytes(blob)
+    return a
+
+
+def _connect(root: Path) -> sqlite3.Connection:
+    d = root / _DB_REL[0]
+    d.mkdir(exist_ok=True)
+    con = sqlite3.connect(str(root.joinpath(*_DB_REL)))
+    con.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS vectors ("
+        " doc_id TEXT PRIMARY KEY,"
+        " content_hash TEXT NOT NULL,"
+        " type TEXT,"
+        " title TEXT,"
+        " path TEXT,"
+        " norm REAL NOT NULL,"
+        " vec BLOB NOT NULL)")
+    return con
+
+
+def _get_meta(con, key, default=None):
+    row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def _set_meta(con, key, value):
+    con.execute("INSERT INTO meta(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+
+
+# --------------------------------------------------------------------------- #
+# reindex — (re)build the vector store from the durable base.
+# --------------------------------------------------------------------------- #
+def reindex(root, *, model=DEFAULT_MODEL, url=DEFAULT_URL, embed=None):
+    """(Re)embed the legible layer of every derived doc into the sidecar.
+
+    Incremental: a doc whose legible content hash is unchanged is skipped (no
+    re-embed). A doc that changed is re-embedded. A doc that no longer exists is
+    pruned. If the embedding `model` differs from the one the store was built with,
+    the whole store is rebuilt (vectors across models are not comparable) — this is
+    the config-provenance rule of ADR-0027.
+
+    `embed` is an injectable `fn(texts) -> [vectors]` (defaults to Ollama over HTTP)
+    so tests run with no backend. Returns a summary dict.
+    """
+    root = Path(root)
+    embed = embed or (lambda texts: ollama_embed(texts, model=model, url=url))
+    con = _connect(root)
+    try:
+        stored_model = _get_meta(con, "model")
+        rebuilt = False
+        if stored_model is not None and stored_model != model:
+            con.execute("DELETE FROM vectors")          # model changed → rebuild
+            rebuilt = True
+
+        docs = _derived_docs(root)
+        present = {d.id for d in docs}
+
+        # Prune vectors for docs that are gone (or all of them, on a rebuild).
+        existing = {r[0]: r[1] for r in
+                    con.execute("SELECT doc_id, content_hash FROM vectors")}
+        pruned = [did for did in existing if did not in present]
+        for did in pruned:
+            con.execute("DELETE FROM vectors WHERE doc_id=?", (did,))
+
+        # Decide what needs (re)embedding: new docs or a changed legible hash.
+        todo = []            # (doc, text, hash)
+        skipped = 0
+        for d in docs:
+            text = legible_text(d)
+            h = _content_hash(text)
+            if existing.get(d.id) == h:
+                skipped += 1
+                continue
+            todo.append((d, text, h))
+
+        embedded = 0
+        dim = int(_get_meta(con, "dim", 0) or 0)
+        if todo:
+            vectors = embed([t for (_, t, _) in todo])
+            if len(vectors) != len(todo):
+                raise RuntimeError("embedder returned the wrong number of vectors")
+            for (d, _text, h), vec in zip(todo, vectors):
+                norm = math.sqrt(sum(x * x for x in vec))
+                con.execute(
+                    "INSERT INTO vectors(doc_id,content_hash,type,title,path,norm,vec) "
+                    "VALUES(?,?,?,?,?,?,?) "
+                    "ON CONFLICT(doc_id) DO UPDATE SET "
+                    "content_hash=excluded.content_hash, type=excluded.type, "
+                    "title=excluded.title, path=excluded.path, norm=excluded.norm, "
+                    "vec=excluded.vec",
+                    (d.id, h, d.type, d.data.get("title", d.id),
+                     str(d.path), norm, _vec_to_blob(vec)))
+                embedded += 1
+                dim = len(vec)
+
+        _set_meta(con, "model", model)
+        _set_meta(con, "dim", dim)
+        con.commit()
+        total = con.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+        return {"model": model, "dim": dim, "embedded": embedded,
+                "skipped": skipped, "pruned": len(pruned),
+                "rebuilt": rebuilt, "total": total}
+    finally:
+        con.close()
+
+
+# --------------------------------------------------------------------------- #
+# search — embed the query, cosine top-k over the stored vectors.
+# --------------------------------------------------------------------------- #
+def search(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
+    """Return the top-`k` derived docs by cosine similarity to `query`:
+    [{id, score, type, title, path}], best first.
+
+    The query is embedded with the SAME model the store was built with (recorded in
+    the sidecar), because cross-model vectors are meaningless — if the caller passes
+    a different `model`, the stored one still wins for the query so results stay
+    coherent (rebuild the store to switch models). An empty store returns []. This
+    only *proposes* candidates (ADR-0027 §2) — the caller reads the real docs.
+    """
+    root = Path(root)
+    con = _connect(root)
+    try:
+        index_model = _get_meta(con, "model")
+        rows = con.execute(
+            "SELECT doc_id, type, title, path, norm, vec FROM vectors").fetchall()
+        if not rows or index_model is None:
+            return []
+        use_model = index_model                     # query must match the index
+        embed = embed or (lambda texts: ollama_embed(texts, model=use_model, url=url))
+        qvec = embed([query])[0]
+        qnorm = math.sqrt(sum(x * x for x in qvec))
+        if qnorm == 0:
+            return []
+        scored = []
+        for doc_id, dtype, title, path, norm, blob in rows:
+            vec = _blob_to_vec(blob)
+            if not norm:
+                continue
+            dot = sum(q * v for q, v in zip(qvec, vec))
+            scored.append({"id": doc_id, "score": dot / (qnorm * norm),
+                           "type": dtype, "title": title, "path": path})
+        scored.sort(key=lambda r: r["score"], reverse=True)
+        return scored[:k]
+    finally:
+        con.close()
+
+
+def retrieve(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
+    """Unified retrieval that ALWAYS answers and never crashes — the *mechanical*
+    form of "prefer semantic search, fall back to `find`." The fallback can't be
+    forgotten because it lives inside one call, not in an adapter's prose.
+
+    It unions the two retrievers, which answer different questions (ADR-0014): the
+    embedding tier proposes by **meaning**, deterministic `find` matches **literally**
+    — so a semantic result never drops an exact-token hit, and a literal result never
+    misses a synonym. Semantic candidates rank first (they carry a score), then any
+    `find` hit not already present, deduped by id.
+
+    Transparent about degradation (§I5): the result carries `via` (which retrievers
+    ran) and `backend` (`up` | `unavailable` | `no-index`). If the embedding backend
+    is down or no index exists, `via` is `"find"` and the AI-free floor answers alone
+    — same trustworthy result, just without the semantic lift. Still *proposes only*
+    (ADR-0027 §2): every hit is a doc to read, never a citation.
+
+    Returns {via, backend, hits: [{id, type, title, path, source, score?}]}.
+    """
+    root = Path(root)
+    find_hits = core.find(root, query)          # the floor — always available, no AI
+
+    def _find_rows():
+        return [{"id": h["id"], "type": h["type"],
+                 "title": h.get("title", h["id"]), "path": h["path"],
+                 "source": "find"} for h in find_hits]
+
+    if index_info(root)["count"] == 0:          # nothing embedded yet → floor only
+        return {"via": "find", "backend": "no-index", "hits": _find_rows()}
+    try:
+        sem_hits = search(root, query, k=k, model=model, url=url, embed=embed)
+    except BackendUnavailable:                  # Ollama down → floor only, transparently
+        return {"via": "find", "backend": "unavailable", "hits": _find_rows()}
+
+    seen, merged = set(), []
+    for h in sem_hits:                          # meaning first (ranked)
+        merged.append({"id": h["id"], "type": h["type"], "title": h["title"],
+                       "path": h["path"], "source": "semantic", "score": h["score"]})
+        seen.add(h["id"])
+    for h in _find_rows():                       # then literal-only matches
+        if h["id"] not in seen:
+            merged.append(h)
+            seen.add(h["id"])
+    return {"via": "semantic+find", "backend": "up", "hits": merged}
+
+
+def index_info(root) -> dict:
+    """Cheap, backend-free facts about the sidecar: {exists, count, model, dim}.
+    Lets a caller tell "no semantic index yet" (→ reindex, or use find) apart from
+    "search ran and found nothing" — both otherwise look like an empty result. No
+    embedding backend is contacted."""
+    p = Path(root).joinpath(*_DB_REL)
+    if not p.exists():
+        return {"exists": False, "count": 0, "model": None, "dim": 0}
+    con = _connect(Path(root))
+    try:
+        return {"exists": True,
+                "count": con.execute("SELECT COUNT(*) FROM vectors").fetchone()[0],
+                "model": _get_meta(con, "model"),
+                "dim": int(_get_meta(con, "dim", 0) or 0)}
+    finally:
+        con.close()
+
+
+# --------------------------------------------------------------------------- #
+# CLI — its own front door; the Core CLI stays inference-free by design.
+# --------------------------------------------------------------------------- #
+def main(argv=None):
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
+    p = argparse.ArgumentParser(
+        prog="muninn_semantic",
+        description="Semantic retrieval tier (T-087, ADR-0027) — embeds the legible "
+                    "layer; the disposable, AI-facing companion to deterministic find.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pr = sub.add_parser("reindex", help="(re)build the disposable vector sidecar from the base")
+    pr.add_argument("root")
+    pr.add_argument("--model", default=DEFAULT_MODEL, help=f"embedding model (default {DEFAULT_MODEL})")
+    pr.add_argument("--url", default=DEFAULT_URL, help=f"Ollama base URL (default {DEFAULT_URL})")
+
+    ps = sub.add_parser("search", help="semantic top-k over the sidecar (proposes candidates only)")
+    ps.add_argument("root")
+    ps.add_argument("query", nargs="+", help="the query")
+    ps.add_argument("-k", type=int, default=10, help="how many candidates (default 10)")
+    ps.add_argument("--model", default=DEFAULT_MODEL)
+    ps.add_argument("--url", default=DEFAULT_URL)
+
+    pt = sub.add_parser("retrieve", help="unified retrieval: semantic + find, always "
+                                         "answers, degrades to find with no backend")
+    pt.add_argument("root")
+    pt.add_argument("query", nargs="+", help="the query")
+    pt.add_argument("-k", type=int, default=10, help="semantic candidates to union (default 10)")
+    pt.add_argument("--model", default=DEFAULT_MODEL)
+    pt.add_argument("--url", default=DEFAULT_URL)
+
+    args = p.parse_args(argv)
+    # Exit 3 == "backend unavailable" — a distinct, scriptable code so a caller (or a
+    # human) knows the tier degraded, not that the base is broken. `find` still works.
+    if args.cmd == "reindex":
+        try:
+            rep = reindex(args.root, model=args.model, url=args.url)
+        except BackendUnavailable as e:
+            print(f"reindex skipped — {e}", file=sys.stderr)
+            return 3
+        print(f"reindexed {args.root}: {rep['total']} vector(s) "
+              f"(embedded {rep['embedded']}, skipped {rep['skipped']}, "
+              f"pruned {rep['pruned']}{', REBUILT' if rep['rebuilt'] else ''}) "
+              f"model={rep['model']} dim={rep['dim']}")
+    elif args.cmd == "search":
+        try:
+            hits = search(args.root, " ".join(args.query), k=args.k,
+                          model=args.model, url=args.url)
+        except BackendUnavailable as e:
+            print(f"semantic search unavailable — {e}", file=sys.stderr)
+            print(f"fall back to the AI-free floor:  {Path(__file__).with_name('muninn_core.py')} "
+                  f"find {args.root} {' '.join(args.query)}", file=sys.stderr)
+            return 3
+        for r in hits:
+            print(f"{r['score']:.3f}  {r['type']:9} {r['id']}  —  {r['title']}")
+        if not hits:
+            info = index_info(args.root)
+            if info["count"] == 0:                      # transparent: not "no match"
+                print("(no semantic index yet — run `reindex`, or use `find`)")
+            else:
+                print("(0 candidates — nothing scored; try `find` for a literal match)")
+        else:
+            print(f"({len(hits)} candidate(s) — propose only; read the sources to ground)")
+    elif args.cmd == "retrieve":
+        # retrieve never raises for a down backend — it degrades to find internally.
+        res = retrieve(args.root, " ".join(args.query), k=args.k,
+                       model=args.model, url=args.url)
+        for h in res["hits"]:
+            tag = h["source"][0].upper()                # S(emantic) / F(ind)
+            score = f"{h['score']:.3f}" if "score" in h else "  ·  "
+            print(f"[{tag}] {score}  {h['type']:9} {h['id']}  —  {h['title']}")
+        print(f"({len(res['hits'])} result(s) via {res['via']}; backend {res['backend']} "
+              f"— propose only; read the sources to ground)")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
