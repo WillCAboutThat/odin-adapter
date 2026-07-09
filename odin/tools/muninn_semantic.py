@@ -199,6 +199,27 @@ def _set_meta(con, key, value):
 # --------------------------------------------------------------------------- #
 # reindex — (re)build the vector store from the durable base.
 # --------------------------------------------------------------------------- #
+def _diff_index(docs, existing):
+    """Deterministic index diff — **NO backend, NO embedding**. Given the current
+    derived docs and the stored `{doc_id: content_hash}`, return
+    `(to_embed, to_prune, fresh)`: `to_embed` = `[(doc, text, hash)]` for new/changed
+    docs, `to_prune` = stored ids whose doc is gone, `fresh` = the up-to-date count.
+    Detection is a faithful, model-free comparison; only *healing* (embedding
+    `to_embed`) needs the accelerator — which is what lets a caller honestly report
+    "N docs aren't searchable yet" even with the backend down."""
+    present = {d.id for d in docs}
+    to_prune = [did for did in existing if did not in present]
+    to_embed, fresh = [], 0
+    for d in docs:
+        text = legible_text(d)
+        h = _content_hash(text)
+        if existing.get(d.id) == h:
+            fresh += 1
+        else:
+            to_embed.append((d, text, h))
+    return to_embed, to_prune, fresh
+
+
 def reindex(root, *, model=DEFAULT_MODEL, url=DEFAULT_URL, embed=None):
     """(Re)embed the legible layer of every derived doc into the sidecar.
 
@@ -221,26 +242,12 @@ def reindex(root, *, model=DEFAULT_MODEL, url=DEFAULT_URL, embed=None):
             con.execute("DELETE FROM vectors")          # model changed → rebuild
             rebuilt = True
 
-        docs = _derived_docs(root)
-        present = {d.id for d in docs}
-
-        # Prune vectors for docs that are gone (or all of them, on a rebuild).
         existing = {r[0]: r[1] for r in
                     con.execute("SELECT doc_id, content_hash FROM vectors")}
-        pruned = [did for did in existing if did not in present]
-        for did in pruned:
+        # Deterministic diff: what to (re)embed, what to prune, what's fresh.
+        todo, pruned, skipped = _diff_index(_derived_docs(root), existing)
+        for did in pruned:                      # prune needs no backend
             con.execute("DELETE FROM vectors WHERE doc_id=?", (did,))
-
-        # Decide what needs (re)embedding: new docs or a changed legible hash.
-        todo = []            # (doc, text, hash)
-        skipped = 0
-        for d in docs:
-            text = legible_text(d)
-            h = _content_hash(text)
-            if existing.get(d.id) == h:
-                skipped += 1
-                continue
-            todo.append((d, text, h))
 
         embedded = 0
         dim = int(_get_meta(con, "dim", 0) or 0)
@@ -325,13 +332,19 @@ def retrieve(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
     misses a synonym. Semantic candidates rank first (they carry a score), then any
     `find` hit not already present, deduped by id.
 
-    Transparent about degradation (§I5): the result carries `via` (which retrievers
-    ran) and `backend` (`up` | `unavailable` | `no-index`). If the embedding backend
-    is down or no index exists, `via` is `"find"` and the AI-free floor answers alone
-    — same trustworthy result, just without the semantic lift. Still *proposes only*
-    (ADR-0027 §2): every hit is a doc to read, never a citation.
+    **Self-healing (ADR-0027, refined 2026-07-09):** before ranking, `retrieve` runs a
+    best-effort `refresh` so a doc ingested since the last embed is searchable *now* —
+    no manual reindex, no adapter step to remember. The refresh is write-only and never
+    raises; if the backend is down, any docs behind stay `find`-reachable and the result
+    carries a `warning` saying so.
 
-    Returns {via, backend, hits: [{id, type, title, path, source, score?}]}.
+    Transparent about degradation (§I5): the result carries `via` (which retrievers
+    ran), `backend` (`up` | `unavailable` | `no-index`), and `warning` (a staleness note
+    or None). If the embedding backend is down or no index exists, `via` is `"find"` and
+    the AI-free floor answers alone — same trustworthy result, just without the semantic
+    lift. Still *proposes only* (ADR-0027 §2): every hit is a doc to read, never a citation.
+
+    Returns {via, backend, warning, hits: [{id, type, title, path, source, score?}]}.
     """
     root = Path(root)
     find_hits = core.find(root, query)          # the floor — always available, no AI
@@ -341,12 +354,14 @@ def retrieve(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
                  "title": h.get("title", h["id"]), "path": h["path"],
                  "source": "find"} for h in find_hits]
 
-    if index_info(root)["count"] == 0:          # nothing embedded yet → floor only
-        return {"via": "find", "backend": "no-index", "hits": _find_rows()}
+    warn = refresh(root, model=model, url=url, embed=embed)["warning"]  # self-heal; never raises
+
+    if index_info(root)["count"] == 0:          # still nothing embedded → floor only
+        return {"via": "find", "backend": "no-index", "hits": _find_rows(), "warning": warn}
     try:
         sem_hits = search(root, query, k=k, model=model, url=url, embed=embed)
     except BackendUnavailable:                  # Ollama down → floor only, transparently
-        return {"via": "find", "backend": "unavailable", "hits": _find_rows()}
+        return {"via": "find", "backend": "unavailable", "hits": _find_rows(), "warning": warn}
 
     seen, merged = set(), []
     for h in sem_hits:                          # meaning first (ranked)
@@ -357,7 +372,7 @@ def retrieve(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
         if h["id"] not in seen:
             merged.append(h)
             seen.add(h["id"])
-    return {"via": "semantic+find", "backend": "up", "hits": merged}
+    return {"via": "semantic+find", "backend": "up", "hits": merged, "warning": warn}
 
 
 def index_info(root) -> dict:
@@ -376,6 +391,55 @@ def index_info(root) -> dict:
                 "dim": int(_get_meta(con, "dim", 0) or 0)}
     finally:
         con.close()
+
+
+def index_staleness(root) -> dict:
+    """How far the sidecar is behind the base — **deterministic, no backend**.
+    `{stale, prune, fresh, indexed}`: `stale` = derived docs new/changed since their
+    last embed, `prune` = stored vectors whose doc is gone, `fresh` = up-to-date,
+    `indexed` = stored total. Detection needs no model (only healing does), so a
+    caller can honestly say "N docs aren't searchable yet" even with Ollama down."""
+    root = Path(root)
+    docs = _derived_docs(root)
+    if not index_info(root)["exists"]:
+        return {"stale": len(docs), "prune": 0, "fresh": 0, "indexed": 0}
+    con = _connect(root)
+    try:
+        existing = {r[0]: r[1] for r in
+                    con.execute("SELECT doc_id, content_hash FROM vectors")}
+    finally:
+        con.close()
+    to_embed, to_prune, fresh = _diff_index(docs, existing)
+    return {"stale": len(to_embed), "prune": len(to_prune),
+            "fresh": fresh, "indexed": len(existing)}
+
+
+def refresh(root, *, model=None, url=DEFAULT_URL, embed=None):
+    """Best-effort, **write-only, never-raising** bring-the-index-current — the
+    Core-invokable refresh sanctioned by ADR-0027 (as refined 2026-07-09): the Core
+    may *invoke* the accelerator and *store* its output in the disposable tier, but
+    the durable base loses nothing if the backend is absent.
+
+    Detection is deterministic (`index_staleness`); only healing calls the backend, so
+    this returns a **structured status** instead of raising:
+      - `clean`   — nothing behind (no backend contact).
+      - `current` — embedded the stale docs / pruned the gone ones (backend up).
+      - `stale`   — backend down and docs are behind; index left as-is and `warning`
+                    set (search still ranks what's there; `find` covers the rest).
+    """
+    rmodel = index_info(root)["model"] or model or DEFAULT_MODEL
+    st = index_staleness(root)
+    if st["stale"] == 0 and st["prune"] == 0:
+        return {"status": "clean", "embedded": 0, "pruned": 0, "stale": 0, "warning": None}
+    try:
+        rep = reindex(root, model=rmodel, url=url, embed=embed)
+        return {"status": "current", "embedded": rep["embedded"],
+                "pruned": rep["pruned"], "stale": 0, "warning": None}
+    except BackendUnavailable as e:
+        return {"status": "stale", "embedded": 0, "pruned": 0, "stale": st["stale"],
+                "warning": (f"{st['stale']} doc(s) added/changed since the last embed "
+                            f"aren't semantically searchable yet — `find` covers them; "
+                            f"reindex when the backend is up ({e})")}
 
 
 # --------------------------------------------------------------------------- #
@@ -407,12 +471,18 @@ def main(argv=None):
     ps.add_argument("--url", default=DEFAULT_URL)
 
     pt = sub.add_parser("retrieve", help="unified retrieval: semantic + find, always "
-                                         "answers, degrades to find with no backend")
+                                         "answers, self-heals, degrades to find with no backend")
     pt.add_argument("root")
     pt.add_argument("query", nargs="+", help="the query")
     pt.add_argument("-k", type=int, default=10, help="semantic candidates to union (default 10)")
     pt.add_argument("--model", default=DEFAULT_MODEL)
     pt.add_argument("--url", default=DEFAULT_URL)
+
+    pf = sub.add_parser("refresh", help="best-effort bring-the-index-current (write-only, "
+                                        "never errors; warns if the backend is down)")
+    pf.add_argument("root")
+    pf.add_argument("--model", default=DEFAULT_MODEL)
+    pf.add_argument("--url", default=DEFAULT_URL)
 
     args = p.parse_args(argv)
     # Exit 3 == "backend unavailable" — a distinct, scriptable code so a caller (or a
@@ -441,13 +511,18 @@ def main(argv=None):
         if not hits:
             info = index_info(args.root)
             if info["count"] == 0:                      # transparent: not "no match"
-                print("(no semantic index yet — run `reindex`, or use `find`)")
+                print("(no semantic index yet — run `reindex`/`refresh`, or use `find`)")
             else:
                 print("(0 candidates — nothing scored; try `find` for a literal match)")
         else:
             print(f"({len(hits)} candidate(s) — propose only; read the sources to ground)")
+        # `search` ranks the index as-is; surface if it's behind (deterministic, no backend).
+        st = index_staleness(args.root)
+        if st["stale"] or st["prune"]:
+            print(f"(note: index is behind — {st['stale']} doc(s) unindexed, "
+                  f"{st['prune']} to prune; `refresh`/`reindex`, or use `retrieve` which self-heals)")
     elif args.cmd == "retrieve":
-        # retrieve never raises for a down backend — it degrades to find internally.
+        # retrieve never raises for a down backend — it self-heals + degrades to find.
         res = retrieve(args.root, " ".join(args.query), k=args.k,
                        model=args.model, url=args.url)
         for h in res["hits"]:
@@ -456,6 +531,17 @@ def main(argv=None):
             print(f"[{tag}] {score}  {h['type']:9} {h['id']}  —  {h['title']}")
         print(f"({len(res['hits'])} result(s) via {res['via']}; backend {res['backend']} "
               f"— propose only; read the sources to ground)")
+        if res.get("warning"):
+            print(f"(note: {res['warning']})")
+    elif args.cmd == "refresh":
+        rep = refresh(args.root, model=args.model, url=args.url)
+        if rep["status"] == "current":
+            print(f"refreshed {args.root}: embedded {rep['embedded']}, pruned {rep['pruned']}")
+        elif rep["status"] == "clean":
+            print(f"refreshed {args.root}: already current")
+        else:                                           # stale — backend down
+            print(f"refresh incomplete — {rep['warning']}", file=sys.stderr)
+            return 3
 
 
 if __name__ == "__main__":

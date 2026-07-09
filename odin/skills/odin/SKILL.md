@@ -177,11 +177,18 @@ Two rules that keep it honest — it lives in the **disposable-index tier** (ADR
 - **Reach for it by task.** A literal token or id → `find`. Meaning, a synonym, "the
   thing about…" → `search`. Use both and merge; they answer different questions.
 
-**Keep it fresh with `reindex`.** The vector store is a git-ignored, rebuildable
-`.odin/semantic.db` sidecar — **not** knowledge, and safe to delete. Run
-`odin_reindex` (or `muninn_semantic.py reindex <root>`) **after an `ingest`** so new
-docs are searchable; it re-embeds only what changed. It needs a reachable embedding
-backend (local Ollama via `ODIN_OLLAMA_URL`; see `docs/odin/ollama-setup.md`).
+**Freshness is automatic — `retrieve` self-heals.** The vector store is a git-ignored,
+rebuildable `.odin/semantic.db` sidecar — **not** knowledge, safe to delete. You do
+**not** need to reindex after an `ingest`: `retrieve` runs a best-effort `refresh`
+before ranking, so a doc ingested since the last embed is searchable on the very next
+retrieve (ADR-0027, refined — the read path may invoke the accelerator write-only). It
+re-embeds only what changed, needs a reachable backend (local Ollama via
+`ODIN_OLLAMA_URL`; see `docs/odin/ollama-setup.md`), and if the backend is down it
+**doesn't block** — the docs behind stay `find`-reachable and `retrieve`'s result
+carries a `warning` you should relay ("N docs added since the last embed aren't
+semantically searchable yet"). `reindex`/`refresh` remain as an **optional proactive
+warm** (e.g. right after a big ingest); bare `search` ranks the index as-is and prints
+a note if it's behind — prefer `retrieve` when you want current results.
 
 **Degrade gracefully AND transparently when Ollama is off/unreachable.** The tier is
 optional; the base loses nothing without it. But *don't hide the degradation* (§I5):
