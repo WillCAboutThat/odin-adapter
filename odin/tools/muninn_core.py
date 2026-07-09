@@ -95,8 +95,12 @@ def log_usage(root, op, *, bytes_in=0, bytes_out=0, **extra) -> None:
 
 
 def usage_report(root) -> dict:
-    """Aggregate the usage ledger by op:
-    {total_ops, by_op: {op: {count, bytes_in, bytes_out}}}. Absent ledger → empty."""
+    """Aggregate the usage ledger by op: {total_ops, by_op: {op: {count, bytes_in,
+    bytes_out, tokens, tokens_n}}}. Absent ledger → empty.
+
+    `tokens` sums the *real* token counts when they were recorded; `tokens_n` is how
+    many records carried one — so a reader can tell "0 tokens logged" (proxy-only, the
+    common case) from "tokens genuinely summed to 0" (never happens for an AI verb)."""
     out = {"total_ops": 0, "by_op": {}}
     p = Path(root) / ".odin" / "usage.jsonl"
     if not p.exists():
@@ -110,12 +114,69 @@ def usage_report(root) -> dict:
         except Exception:
             continue
         op = str(rec.get("op", "?"))
-        agg = out["by_op"].setdefault(op, {"count": 0, "bytes_in": 0, "bytes_out": 0})
+        agg = out["by_op"].setdefault(
+            op, {"count": 0, "bytes_in": 0, "bytes_out": 0, "tokens": 0, "tokens_n": 0})
         agg["count"] += 1
         agg["bytes_in"] += int(rec.get("bytes_in", 0) or 0)
         agg["bytes_out"] += int(rec.get("bytes_out", 0) or 0)
+        if rec.get("tokens") is not None:
+            agg["tokens"] += int(rec.get("tokens") or 0)
+            agg["tokens_n"] += 1
         out["total_ops"] += 1
     return out
+
+
+def _scope_bytes(root, ids) -> int:
+    """Deterministic byte-footprint of a set of doc/source ids — the readable bytes an
+    AI-heavy verb (ask/review/synthesize) grounded in. A source counts its current
+    text (its `source-text.md` aid or text canonical, via `_source_bytes`); any other
+    doc (summary/insight/decision/…) counts its file size. Unknown ids count 0. This
+    is the honest *proxy* for cost when real token counts aren't exposed (T-088)."""
+    root = Path(root)
+    linter = Linter(root)
+    linter.load()
+    total = 0
+    for i in ids or []:
+        d = linter.by_id.get(i)
+        if d is None:
+            continue
+        if d.kind == "source":
+            total += _source_bytes(root, i)
+        else:
+            try:
+                total += d.path.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def usage_log(root, op, *, scope=None, bytes_in=None, bytes_out=0, tokens=None,
+              note=None):
+    """Append a usage record for an **adapter verb** the Core never sees itself —
+    `ask`, `review`, `synthesize` (T-088). These are the real token spenders, so
+    measuring them is what answers "is routine `review` worth its cost?".
+
+    `bytes_in` defaults to the deterministic `_scope_bytes` of `scope` (the doc/source
+    ids the verb read) — a faithful, reproducible *proxy* for how much it chewed. An
+    explicit `bytes_in` overrides it. `tokens` is the **real** count when the harness
+    exposes it (Claude Code /cost, an API `usage` field, subagent task metadata) and
+    stays null otherwise — the ledger is honest about which it has. Best-effort like
+    all usage accounting: it never fails the verb it measures.
+
+    Returns the record's computed fields (for the caller to echo)."""
+    ids = list(scope or [])
+    if bytes_in is None:
+        bytes_in = _scope_bytes(root, ids)
+    extra = {}
+    if tokens is not None:
+        extra["tokens"] = int(tokens)
+    if ids:
+        extra["scope_n"] = len(ids)
+    if note:
+        extra["note"] = str(note)
+    log_usage(root, op, bytes_in=bytes_in, bytes_out=bytes_out, **extra)
+    return {"op": op, "bytes_in": bytes_in, "bytes_out": int(bytes_out or 0),
+            "tokens": tokens, "scope_n": len(ids)}
 
 
 def capture(root, id, body, *, origin, tier="full", capture_reason=None,
@@ -1022,6 +1083,22 @@ def main(argv=None):
     pu = sub.add_parser("usage", help="report the disposable usage ledger (ADR-0027)")
     pu.add_argument("root")
 
+    pul = sub.add_parser("usage-log",
+                         help="append a usage record for an adapter verb — ask/review/"
+                              "synthesize (T-088). Core computes the scope byte-footprint.")
+    pul.add_argument("root")
+    pul.add_argument("op", help="the verb being measured, e.g. review | ask | synthesize")
+    pul.add_argument("--scope", action="append", dest="scope",
+                     help="a doc/source id the verb read (repeatable); Core sums their "
+                          "readable bytes as the deterministic cost proxy")
+    pul.add_argument("--bytes-in", type=int, dest="bytes_in",
+                     help="override the computed scope byte-footprint")
+    pul.add_argument("--bytes-out", type=int, dest="bytes_out", default=0,
+                     help="bytes the verb produced (e.g. the answer/insight length)")
+    pul.add_argument("--tokens", type=int,
+                     help="REAL token count when the harness exposes it (else omit)")
+    pul.add_argument("--note")
+
     pfind = sub.add_parser("find", help="retrieve docs matching a query")
     pfind.add_argument("root")
     pfind.add_argument("query", nargs="*", help="query terms (omit to list all of --type)")
@@ -1110,9 +1187,13 @@ def main(argv=None):
     elif args.cmd == "usage":
         rep = usage_report(args.root)
         for op, agg in sorted(rep["by_op"].items()):
+            tok = str(agg.get("tokens", 0)) if agg.get("tokens_n") else "n/a"
             print(f"{op:16} {agg['count']:>5}x  in={agg['bytes_in']:>10}  "
-                  f"out={agg['bytes_out']:>10}")
+                  f"out={agg['bytes_out']:>10}  tok={tok:>8}")
         print(f"({rep['total_ops']} op(s) logged)")
+    elif args.cmd == "usage-log":
+        print(usage_log(args.root, args.op, scope=args.scope, bytes_in=args.bytes_in,
+                        bytes_out=args.bytes_out, tokens=args.tokens, note=args.note))
     elif args.cmd == "fingerprint":
         print(fingerprint(args.root))
     elif args.cmd == "find":

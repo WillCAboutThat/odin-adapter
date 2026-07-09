@@ -279,6 +279,28 @@ TOOLS = [
             "url": {"type": "string", "description": "Ollama base URL (default ODIN_OLLAMA_URL or http://localhost:11434)."},
         }, required=["root", "query"]),
     },
+    {
+        "name": "odin_usage_log",
+        "description": "Record a usage entry for an AI-heavy ADAPTER verb — `ask`, "
+                       "`review`, `synthesize` — that the Core never sees itself, so "
+                       "the ledger can measure the real token spenders (T-088). Call "
+                       "it AFTER the verb. Pass `scope` = the doc/source ids the verb "
+                       "read; the Core computes their byte-footprint deterministically "
+                       "as an honest cost proxy. Add `tokens` ONLY when the harness "
+                       "actually exposes a real count (/cost, an API usage field, "
+                       "subagent metadata) — never guess; omit it otherwise. Feeds "
+                       "`odin usage`, so review cadence can be tuned by evidence.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "op": {"type": "string", "description": "The verb measured: ask | review | synthesize."},
+            "scope": {"type": "array", "items": {"type": "string"},
+                      "description": "Doc/source ids the verb read; Core sums their readable bytes."},
+            "bytes_in": {"type": "integer", "description": "Override the computed scope byte-footprint."},
+            "bytes_out": {"type": "integer", "description": "Bytes the verb produced (answer/insight length)."},
+            "tokens": {"type": "integer", "description": "REAL token count when the harness exposes it; omit to leave null (do not estimate)."},
+            "note": {"type": "string", "description": "Optional short label (e.g. the scope/project)."},
+        }, required=["root", "op"]),
+    },
 ]
 
 _TOOL_NAMES = {t["name"] for t in TOOLS}
@@ -358,6 +380,9 @@ _DISPATCH = {
     "odin_retrieve": lambda root, p: semantic.retrieve(
         root, p["query"], k=p.get("k", 10), model=p.get("model"),
         url=p.get("url") or semantic.DEFAULT_URL),
+    "odin_usage_log": lambda root, p: core.usage_log(
+        root, p["op"], scope=p.get("scope"), bytes_in=p.get("bytes_in"),
+        bytes_out=p.get("bytes_out", 0), tokens=p.get("tokens"), note=p.get("note")),
 }
 
 

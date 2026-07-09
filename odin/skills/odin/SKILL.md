@@ -25,7 +25,7 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
   Core through its `odin_*` tools — `odin_init`, `odin_capture`, `odin_dedup_check`,
   `odin_source_status`, `odin_derive`, `odin_index`, `odin_find`, `odin_project`,
   `odin_resolve`, `odin_record_decision`, `odin_fingerprint`, `odin_lint`,
-  `odin_reindex`, `odin_search`, `odin_retrieve`. This is
+  `odin_reindex`, `odin_search`, `odin_retrieve`, `odin_usage_log`. This is
   how a plugin install with **no checkout and no `pip install`** reaches the Core, so
   **prefer it**. They are the *same* ops with structured args: a body the CLI takes
   via `--file`/stdin becomes the **`body`** param, `--source-file` becomes the
@@ -493,3 +493,20 @@ detect→consent→repair loop as lint).
 **It is `review`, not `audit`** — "audit" already means the *deterministic* check
 (re-read + re-hash provenance, ADR-0014); `review` is the subjective second
 opinion. Keep the words distinct. On-demand and advisory — **never a gate**.
+
+## Usage logging (measure the AI-heavy verbs — best-effort, never a gate)
+
+The ledger auto-records the deterministic Core writes (`capture`/`derive`), but the
+real token spenders — **`ask`, `review`, `synthesize`** — are your orchestration, so
+the Core can't see them. **After** you finish one, append a usage record with
+`odin_usage_log` (CLI `usage-log`) so `odin usage` shows the full picture and review
+cadence can be tuned by evidence, not guess (T-088):
+
+- Pass **`scope`** = the doc/source ids the verb actually read; the Core computes their
+  byte-footprint deterministically as an honest cost **proxy** (you don't compute bytes).
+- Add **`tokens`** *only* when the harness hands you a real count (a `/cost` figure the
+  user shares, an API `usage` field, subagent task metadata). **Never estimate** — omit
+  it and the ledger stays honest that it has only the proxy.
+- It is **best-effort and silent**: logging never blocks or alters the verb, and a
+  failure to log is not worth a word to the user. Never treat the ledger as a budget or
+  a gate — it is measurement, not control.
