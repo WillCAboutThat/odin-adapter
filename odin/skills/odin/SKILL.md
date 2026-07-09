@@ -20,12 +20,25 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
 
 ## Setup (host bindings)
 
-- **Core CLI:** `odin <op> …` when the Core is installed (`pip install -e .` from the
-  project-odin checkout — not on PyPI; T-058), **or** `python <ODIN>/tools/muninn_core.py
-  <op> …` from a checkout at `<ODIN>`. Either way the `…` in the commands below stands
-  for that prefix. Ops: `init`, `capture`, `dedup-check`, `source-status`, `derive`, `index`,
-  `find`, `project`, `resolve`, `record-decision`, `fingerprint`, `lint`. Bodies come
-  from `--file` or stdin.
+- **Core transport — prefer the MCP tools when present (T-076).** When the bundled
+  `odin-core` **MCP server** is available (the plugin install ships it), drive the
+  Core through its `odin_*` tools — `odin_init`, `odin_capture`, `odin_dedup_check`,
+  `odin_source_status`, `odin_derive`, `odin_index`, `odin_find`, `odin_project`,
+  `odin_resolve`, `odin_record_decision`, `odin_fingerprint`, `odin_lint`. This is
+  how a plugin install with **no checkout and no `pip install`** reaches the Core, so
+  **prefer it**. They are the *same* ops with structured args: a body the CLI takes
+  via `--file`/stdin becomes the **`body`** param, `--source-file` becomes the
+  **`source_file`** path, and every other flag maps to the same-named param. The two
+  transports are **byte-identical** (ADR-0022; `test_mcp_server.py`) — so each
+  `… <op>` command below maps 1:1 to `odin_<op>`; fall back to the CLI only when the
+  MCP server isn't present.
+- **Core CLI (the fallback + canonical op reference):** `odin <op> …` when the Core is
+  installed (`pip install -e .` from the project-odin checkout — not on PyPI; T-058),
+  **or** `python <ODIN>/tools/muninn_core.py <op> …` from a checkout at `<ODIN>`.
+  Either way the `…` in the commands below stands for that prefix. Ops: `init`,
+  `capture`, `dedup-check`, `source-status`, `derive`, `index`, `find`, `project`,
+  `resolve`, `record-decision`, `fingerprint`, `lint` (hyphens here; the MCP tools use
+  underscores). Bodies come from `--file` or stdin.
 - **Connectors / `fetch` (explore):** reaching an external target is done through
   whatever **MCP/tool you already have** — there is no ODIN connector registry and
   Odin holds no credentials (ADR-0020). `fetch` (get one named target's bytes) is
@@ -302,6 +315,16 @@ sources (ADR-0009). Full behavior: `docs/odin/SKILLS.md` §5.
      index-projected, most-skimmed span — "a breach *tied to* the return clause"
      plants a false tie in every reader who only skims. If the link is your
      inference, the abstract must say so or not say it.
+   - **Corroboration breadth is itself a claim — count witnesses per claim, not
+     per insight.** An insight grounded in N peer sources does not make every
+     trait N-corroborated. An abstract or facet may claim agreement only across
+     the sources that attest *that specific* trait: if two of three sources say
+     "gentle" and all three say "good with cats," say which — *"all three agree
+     she's good with cats; two of them add gentle and food-motivated."* Never
+     round the breadth up to the source count. This is the sibling of the rule
+     above — there the tie was invented; here the tie is real but its **breadth**
+     is inflated, and it inflates in exactly the most-skimmed span (surfaced by
+     the adapter rubric, ADR-0023/T-075; extends ADR-0015).
    - **Label the inferential step in the body.** Where the insight connects what
      the sources leave separate, write the boundary in: *"the contract does not
      link these — the connection is this insight's inference."* Pre-empt the
@@ -369,3 +392,49 @@ is cheap and reversible *because* it commits nothing.
 promote a preview summary into memory unverified; park to `inbox/` without an
 explicit opt-in. **Writes:** nothing durable — only, on the opt-in, transient
 `inbox/` staging. Memory changes only when a separate `ingest` is requested.
+
+## Review (honesty audit — challenge the base's own conclusions)
+
+`review` is the **semantic sibling of the linter**: `lint` checks structural
+health deterministically; `review` challenges whether the derived layer is still
+*honest* — a judgment no deterministic rule can make (entailment is semantic,
+ADR-0015 §3; ADR-0026). It is the **proactive** form of the reactive challenge
+(ADR-0015): run the same adversarial re-read the assurance net relies on, but
+across a whole scope on demand instead of one claim by accident. It **detects and
+surfaces**; the heal is `regenerate` — never silent (the same
+detect→consent→repair loop as lint).
+
+1. **Resolve the scope.** `… resolve <root> [project]` — whole base, a project, or
+   a single named doc; every scope unions in the `global` views (ADR-0018).
+   Enumerate the derived docs in scope (summaries, entities, concepts, questions,
+   insights).
+2. **Be the grounded adversarial judge — default to skepticism.** For each derived
+   doc, **re-read the actual bytes** of every source it cites (`sources/<id>/…` —
+   the canonical file or its text aid), *not* the doc's paraphrase. A claim you
+   can't ground from a quoted span is a finding, not a benefit of the doubt. This
+   is the rubric's challenger (`scripts/adapter_eval/CHALLENGER.md`, ADR-0023)
+   turned on the user's *own* base — **drop its grading-fixture isolation rules**
+   (never-read-`*generator*` is for fair benchmarking), keep its default-to-fail.
+3. **Check two things, and say which.**
+   - **Authoring overreach** — a claim the sources don't state, or a corroboration
+     *breadth* wider than its witnesses (count witnesses per claim, T-077). Re-read
+     per composed claim: *"do the sources state this, or does the doc?"*
+   - **Drift against new knowledge** — does the conclusion still hold against
+     *everything the base now holds*, including sources ingested **after** this doc
+     was derived? The linter can't see this — the newer source isn't in the doc's
+     provenance, so no hash changed — so it's yours to catch.
+4. **Report a hedged second opinion — never a verdict.** For each finding: name the
+   doc + the claim, quote the source span (or say plainly *no source attests this*),
+   state the doubt in the reader's words, and default to *"a skeptical reader would
+   question this."* **No deterministic-looking counts** ("3 errors") — apeing the
+   linter would launder judgment as fact (the very overreach you're hunting). If two
+   passes might disagree, say so.
+5. **Offer `regenerate`, don't apply it.** Each finding ends by offering the heal;
+   the user consents per finding. `review` **writes nothing** — it is **read-only**,
+   with **no durable "reviewed" mark** on any doc (an AI blessing rots and invites
+   false trust, ADR-0014; the durable audit stays provenance you can re-hash).
+   `regenerate` does any write.
+
+**It is `review`, not `audit`** — "audit" already means the *deterministic* check
+(re-read + re-hash provenance, ADR-0014); `review` is the subjective second
+opinion. Keep the words distinct. On-demand and advisory — **never a gate**.
