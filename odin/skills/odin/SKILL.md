@@ -25,7 +25,7 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
   Core through its `odin_*` tools — `odin_init`, `odin_capture`, `odin_dedup_check`,
   `odin_source_status`, `odin_derive`, `odin_index`, `odin_find`, `odin_project`,
   `odin_resolve`, `odin_record_decision`, `odin_fingerprint`, `odin_lint`,
-  `odin_reindex`, `odin_search`, `odin_retrieve`, `odin_usage_log`. This is
+  `odin_reindex`, `odin_search`, `odin_retrieve`, `odin_usage_log`, `odin_refresh`. This is
   how a plugin install with **no checkout and no `pip install`** reaches the Core, so
   **prefer it**. They are the *same* ops with structured args: a body the CLI takes
   via `--file`/stdin becomes the **`body`** param, `--source-file` becomes the
@@ -133,7 +133,15 @@ Find a `muninn.yml` at or above the working directory (or a path the user gives)
    re-lint. "The Muninn lints clean" is the definition of done. A common finding is
    **L15** (a source with no summary) — heal it per **Regenerate**, don't ship past
    it.
-7. **Report** plainly: what you captured (id, where it lives), what you derived,
+7. **Warm the semantic index (optional, best-effort — T-091).** After a clean lint,
+   fire `odin_refresh` (or `muninn_semantic.py refresh <root>`) so the docs you just
+   added are embedded **now** — while the user is already here — and the next
+   `retrieve`/`search` is instant instead of paying a cold model-load. It is
+   **write-only and never blocks**: no backend → a clean no-op. You may **skip it**
+   entirely — `retrieve` self-heals (T-090), so this only *moves* the embed cost off
+   the first query; it never affects correctness. Say nothing about it unless it
+   returns a `warning` worth relaying.
+8. **Report** plainly: what you captured (id, where it lives), what you derived,
    and anything notable (a dedup hit, a new version, staleness surfaced).
 
 ## Invariants — never violate (the Core/linter enforce them)

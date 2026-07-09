@@ -301,6 +301,24 @@ TOOLS = [
             "note": {"type": "string", "description": "Optional short label (e.g. the scope/project)."},
         }, required=["root", "op"]),
     },
+    {
+        "name": "odin_refresh",
+        "description": "Best-effort **warm** of the disposable semantic index (T-091): "
+                       "embed any doc changed since the last embed, prune the gone ones. "
+                       "Call it at the END of an `ingest` so what you just added is "
+                       "searchable *now* — the next `odin_retrieve` is instant instead of "
+                       "paying a cold-load. WRITE-ONLY and NEVER errors: no backend → a "
+                       "clean no-op with a status, so no try/except needed (unlike "
+                       "`odin_reindex`, which raises). It is a pure optimization — safe to "
+                       "skip, because `odin_retrieve` self-heals (T-090); this only moves "
+                       "the embed cost off the first query. Returns {status: clean|current|"
+                       "stale, embedded, pruned, warning}. Relay `warning` if present.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "model": {"type": "string", "description": "Embedding model (default nomic-embed-text / the index's own)."},
+            "url": {"type": "string", "description": "Ollama base URL (default ODIN_OLLAMA_URL or http://localhost:11434)."},
+        }, required=["root"]),
+    },
 ]
 
 _TOOL_NAMES = {t["name"] for t in TOOLS}
@@ -383,6 +401,8 @@ _DISPATCH = {
     "odin_usage_log": lambda root, p: core.usage_log(
         root, p["op"], scope=p.get("scope"), bytes_in=p.get("bytes_in"),
         bytes_out=p.get("bytes_out", 0), tokens=p.get("tokens"), note=p.get("note")),
+    "odin_refresh": lambda root, p: semantic.refresh(
+        root, model=p.get("model"), url=p.get("url") or semantic.DEFAULT_URL),
 }
 
 
