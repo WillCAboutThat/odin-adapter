@@ -122,16 +122,22 @@ just deferred to the moment you learn the connector exists.
    - **Pasted/chat text (no original file):** `… capture <root> src-<slug> --file <bodyfile>
      --origin-system chat --origin-ref <where>` (canonical `source.md`).
    - **A URL / connector source** (e.g. an `explore` finding, a live web page):
-     capture the fetched text with `--origin-system url --origin-ref <URL>` and add
-     **`--recoverable`** so `regenerate` can re-`fetch` it later (T-066 self-heal);
-     use **`--tier reference`** when the **authoritative copy is the live URL**, not
-     your rendering. *Reference tier is about **authority, not storage**:* you still
-     store the fetched text as the source body (so `find` / `search` / the L18
-     compression check all work over it) — it is a re-fetchable **rendering**, never
-     the durable original. And because that rendering came through a **model-driven
-     fetch** (not a deterministic Core extractor), stamp its summary
-     **`--derivation model-read`**, not `extracted` — the text passed through a model,
-     so that is its honest assurance (mirrors the opaque-source rule under Derive).
+     always add `--origin-system url --origin-ref <URL>` + **`--recoverable`** so
+     `regenerate` can re-`fetch` it later (T-066 self-heal), and **`--tier reference`**
+     when the **authoritative copy is the live URL**, not your snapshot (*reference is
+     about **authority, not storage***). **For an HTML page, prefer the raw bytes:**
+     fetch the page **decompressed** (e.g. `curl -L --compressed`, or your fetch tool's
+     raw-HTML mode — a gzip'd body decoded as text is garbage) and capture it with
+     **`--source-file page.html`**, so the Core's html extractor writes a faithful
+     **`extracted`** `source-text.md`. This grounds the summary in the *full* page text
+     (typically many times richer than a model rendering) — an **ordinary summary, no
+     `model-read` stamp**; nav/footer chrome in the extract is fine, you ignore it when
+     you read. **Fall back to the model-driven fetch rendering** — store *that* text as
+     the source body and stamp its summary **`--derivation model-read`** — only when raw
+     HTML is unusable: a bot-blocked page, a JS-rendered SPA whose static HTML is mostly
+     chrome, or a non-HTML endpoint. The rendering is a re-fetchable snapshot, never the
+     durable original; `model-read` is its honest assurance (mirrors the opaque-source
+     rule under Derive).
    Report the dedup/version outcome the Core returns. Capture needs no approval —
    the user asked you to remember it (ADR-0007) — but confirm before storing
    anything that looks like secrets or personal data.

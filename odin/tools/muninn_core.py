@@ -554,10 +554,16 @@ def regenerate_index(root):
         lines.append("## Sources")
         for d in sources:
             cov = cover.get(d.id)
+            origin = d.data.get("origin") or {}
             if cov is not None:
                 desc = cov.data.get("title", cov.id)
+                # Surface the source's origin locator (a URL, repo, connector ref) next to its
+                # summary title, so a human skimming the index sees the LINEAGE without opening
+                # the source's meta.yml. Most valuable for web/reference sources.
+                ref = origin.get("ref")
+                if ref:
+                    desc = f"{desc} — {ref}"
             else:
-                origin = d.data.get("origin") or {}
                 desc = f"(source; {origin.get('ref') or origin.get('system') or 'not yet summarized'})"
             # Link to the actual canonical file (source.pdf, …), not a hardcoded
             # source.md that binary sources don't have (ADR-0010).
