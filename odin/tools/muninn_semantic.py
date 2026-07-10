@@ -53,6 +53,10 @@ from muninn_lint import Linter, split_frontmatter  # noqa: E402
 # Backend config — env-driven so nothing is hardcoded (see docs/odin/ollama-setup.md).
 DEFAULT_URL = os.environ.get("ODIN_OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("ODIN_EMBED_MODEL", "nomic-embed-text")
+# Optional: how long Ollama keeps the embed model resident after a call (env
+# `ODIN_OLLAMA_KEEP_ALIVE`, e.g. "30m", "24h", "-1" for forever). Unset → Ollama's
+# default (~5m). Longer keeps the first-of-session retrieve warm (T-092).
+KEEP_ALIVE = os.environ.get("ODIN_OLLAMA_KEEP_ALIVE")
 
 
 class BackendUnavailable(RuntimeError):
@@ -83,7 +87,10 @@ def ollama_embed(texts, *, model=DEFAULT_MODEL, url=DEFAULT_URL, timeout=120):
     """
     if not texts:
         return []
-    payload = json.dumps({"model": model, "input": list(texts)}).encode("utf-8")
+    body = {"model": model, "input": list(texts)}
+    if KEEP_ALIVE:                                       # keep the model resident longer (T-092)
+        body["keep_alive"] = KEEP_ALIVE
+    payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url.rstrip("/") + "/api/embed",
         data=payload,
