@@ -103,6 +103,18 @@ def content_hash_of_body(body: str) -> str:
     return content_hash_of_bytes(body.encode("utf-8"))
 
 
+def derived_content_hash(title, abstract, body) -> str:
+    """Content self-hash of a derived doc's AUTHORED fields (title + abstract + body),
+    deliberately excluding machine/provenance frontmatter (id, sources, derived_at,
+    status, self_hash, …). The Core stamps it at write and the linter recomputes it
+    (L18-opt-in / ADR-0029), so they must agree: an out-of-band edit to the authored
+    content is detectable (L19), while a `regenerate` that reproduces the same content
+    (only `derived_at` moves) is not a false positive. Body is stripped so the trailing
+    newline the writer appends doesn't shift the hash."""
+    canonical = f"{title or ''}\n\n{abstract or ''}\n\n{(body or '').strip()}\n"
+    return content_hash_of_body(canonical)
+
+
 def source_content_hash(source_md: Path) -> str:
     """Text-source hash: frontmatter stripped, body hashed (SPEC §4.2)."""
     _, body = split_frontmatter(source_md.read_text(encoding="utf-8"))
@@ -221,6 +233,10 @@ class Linter:
         self.findings: list[Finding] = []
         self.docs: list[Doc] = []
         self.by_id: dict[str, Doc] = {}
+        # L19 opt-in: derived-doc self-hash integrity, enabled per-Muninn in muninn.yml
+        # (`integrity.derived_self_hash: true`). Default off so it never churns a base
+        # that didn't ask for it (ADR-0029 §4). Set in _load_manifest.
+        self._self_hash_enabled = False
 
     # -- reporting ---------------------------------------------------------- #
     def error(self, rule, msg, path):
@@ -256,6 +272,7 @@ class Linter:
         data = yaml.safe_load(mpath.read_text(encoding="utf-8")) or {}
         if "muninn" not in data:
             self.error("L12", "muninn.yml missing required 'muninn:' format version", mpath)
+        self._self_hash_enabled = bool((data.get("integrity") or {}).get("derived_self_hash"))
         self.docs.append(Doc(id="__manifest__", type="manifest", kind="manifest", path=mpath, data=data))
 
     def _load_sources(self):
@@ -386,6 +403,21 @@ class Linter:
         for link in d.data.get("see_also") or []:
             if link not in self.by_id:
                 self.error("L7", f"see_also link '{link}' resolves to nothing", d.path)
+        # L19 derived-content integrity (opt-in, ADR-0029). When a Muninn enables
+        # `integrity.derived_self_hash`, a derived doc carries a `self_hash` over its
+        # authored content, stamped by the Core at write. A mismatch means the doc was
+        # edited **out of band** (not through the Core) — the one in-format signal that
+        # catches a hand-edit to a derived doc (sources are already covered by L5). It
+        # is honesty tooling, not tamper-proofing: an adversary who edits the doc can
+        # also rewrite the hash. A doc with no `self_hash` (captured before the flag was
+        # enabled) is skipped, so turning the flag on never forces a mass regenerate.
+        if self._self_hash_enabled and (stamped := d.data.get("self_hash")):
+            _, body = split_frontmatter(d.path.read_text(encoding="utf-8"))
+            actual = derived_content_hash(d.data.get("title"), d.data.get("abstract"), body or "")
+            if stamped != actual:
+                self.error("L19", "derived doc edited out-of-band — self_hash does not "
+                           "match its authored content; regenerate it or revert the edit",
+                           d.path)
         # L18 summary-compression: a summary must be shorter than its source(s). A
         # summary *compresses* — restating a source at length is paraphrase-bloat, not a
         # summary; enrich for findability (reader-vocabulary facets), not length. Advisory

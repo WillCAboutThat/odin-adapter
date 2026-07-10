@@ -58,7 +58,54 @@ Find a `muninn.yml` at or above the working directory (or a path the user gives)
   `lint` entry in `log.md`, say the base changed and suggest a lint.
 - **None:** do **not** silently create one. Offer `init`, and **confirm where it
   will live** — the user must always know where their Muninn is. On yes:
-  `python <ODIN>/tools/muninn_core.py init <path> --name "<name>"`, then continue.
+  `python <ODIN>/tools/muninn_core.py init <path> --name "<name>"`, then continue. In
+  that same confirmation, mention the one setting worth knowing: **integrity
+  self-hashing (L19)** flags any out-of-band edit to a derived doc; it is **off by
+  default** and worth enabling for shared, multi-writer, or non-git bases. It is
+  self-documented in `muninn.yml` (`integrity.derived_self_hash`); the user can flip it
+  there or just ask you to — and you can `stamp` an existing base to bring older docs
+  under it. Don't gate `init` on an answer; inform, and let off-by-default proceed.
+
+## First-run setup — bootstrap the resource landscape from what you already know
+
+Right after a fresh `init` (and never as a silent write), **orient the base** — this is how
+an enterprise Muninn avoids per-resource authoring. You already know what **connectors** you
+have (your MCP/tool self-descriptions) and can see the repos in reach, so **propose the whole
+landscape map at once**, then let the user confirm in one pass:
+
+1. **Survey your connectors + repos.** Enumerate the connectors you hold (Jira, Drive, Slack,
+   a KB, code hosts) and any repositories in reach. This is transient reasoning over what
+   *this adapter* has — not stored state.
+2. **Propose the map — one landscape entry per resource.** "I can see Jira, Google Drive, a
+   Confluence KB, and the `pmt-core` / `infra` repos. Want me to record a landscape of what
+   each holds?" **Draft, then confirm** — don't dump your tool list as fact.
+3. **Author the durable entries the user keeps** — but ground each in a **fact about their
+   world**, not in your transient tool list (the tool set changes next session; the fact
+   shouldn't). Precedence, same as repo surfaces (ADR-0028 §6):
+   - **(a)** the connector's own self-description (what the MCP says it is) + **the user's
+     confirmation/steer** ("Jira PLAT is our platform work") → the grounded source;
+   - **(b)** a *light* survey (list top-level projects/spaces) to enrich "what it holds" —
+     **flagged as sampled**, low assurance, not authoritative;
+   - a **repo** → `capture-repo` its constitution and author its mental model (see *Ingest a
+     repository*).
+   For each: `derive` a short landscape summary, **assert the connector** with
+   `--connector <system>=<ref>`, and place it (+ its source) in the **`global` view**
+   (`… project <root> global --scope global --member …`) so it's always in scope.
+4. **Show the roster and hand off.** `… connectors <root>` prints the computed map; tell the
+   user it grows as they ingest and refines on their word. **Never gate `init` on this** —
+   offer it, do it on the nod, and a user who declines just has an empty landscape to fill later.
+
+**Keep the landscape current — opportunistically.** The first-run survey is best-effort and
+**cannot enumerate every connector**: MCP tools self-describe, but a **host CLI** (`gh`,
+`aws`, `kubectl`, `psql`), a plain HTTP API you call, or a connector added later does **not**
+— you only learn you have it by *using* it. So don't lean on setup alone. **Whenever you
+reach a connector during a task that isn't in the landscape** (check `… connectors <root>`),
+and it's a **durable resource** worth mapping (a code host, an issue tracker, a cloud
+account — not a one-off `curl`), **notice it and offer to record it**: *"I used `gh` to reach
+GitHub, which isn't in your landscape — want me to add it?"* Judge durability; **offer, get
+approval, never a silent write**. This is how the map catches what the survey structurally
+can't — the same reasoning the survey uses (a self-description you *observed by using it*),
+just deferred to the moment you learn the connector exists.
 
 ## Ingest (the flagship): remember a document
 
@@ -77,8 +124,14 @@ Find a `muninn.yml` at or above the working directory (or a path the user gives)
    - **A URL / connector source** (e.g. an `explore` finding, a live web page):
      capture the fetched text with `--origin-system url --origin-ref <URL>` and add
      **`--recoverable`** so `regenerate` can re-`fetch` it later (T-066 self-heal);
-     use `--tier reference` when the authoritative copy is the live URL, not your
-     rendering.
+     use **`--tier reference`** when the **authoritative copy is the live URL**, not
+     your rendering. *Reference tier is about **authority, not storage**:* you still
+     store the fetched text as the source body (so `find` / `search` / the L18
+     compression check all work over it) — it is a re-fetchable **rendering**, never
+     the durable original. And because that rendering came through a **model-driven
+     fetch** (not a deterministic Core extractor), stamp its summary
+     **`--derivation model-read`**, not `extracted` — the text passed through a model,
+     so that is its honest assurance (mirrors the opaque-source rule under Derive).
    Report the dedup/version outcome the Core returns. Capture needs no approval —
    the user asked you to remember it (ADR-0007) — but confirm before storing
    anything that looks like secrets or personal data.
@@ -149,6 +202,44 @@ Find a `muninn.yml` at or above the working directory (or a path the user gives)
    returns a `warning` worth relaying.
 8. **Report** plainly: what you captured (id, where it lives), what you derived,
    and anything notable (a dedup hit, a new version, staleness surfaced).
+
+## Ingest a repository (its *mental model*, not its files)
+
+To remember a **codebase**, capture its **constitution** and author a **mental model** —
+what the repo is *for*, its role in the system, its major boundaries, its public contract,
+and ownership. **Never a file-by-file census** (ADR-0028): you capture a repo's *identity*,
+not its implementation.
+
+1. **Capture the constitution.**
+   `… capture-repo <root> src-<slug> <repo-path> [--origin-ref <remote-url>] [--head <commit>]`.
+   The Core builds a deterministic **constitution manifest** from the repo's intent-bearing
+   surfaces — README, agent contract (`CLAUDE.md`/`AGENTS.md`), ARCHITECTURE / in-repo ADRs,
+   public contract, identity manifests, orchestration (`docker-compose`), and the top-level
+   **shape** — captured **reference-tier** (`origin.system: repo`; the live repo is the
+   authoritative copy).
+   - **Augment the floor when this repo's identity lives elsewhere.** The default surfaces
+     are the AI-free floor; **you judge what matters *here*** and add it with
+     `--surface LABEL=glob[,glob…]` (repeatable) — e.g. a deploy descriptor
+     (`--surface deploy=Dockerfile,netlify.toml,fly.toml`), IaC
+     (`--surface iac=*.tf,terraform/*.tf`), a build (`--surface build=Makefile`), a data
+     pipeline (`--surface pipeline=dvc.yaml`). **Choosing the surfaces is your judgment;
+     hashing them is the Core's faithful transform** (ADR-0028 §6), and your choice is
+     recorded in the manifest (legible, re-checkable).
+2. **Read the manifest and author the mental model** — a summary stamped
+   **`--derivation model-read`** (you *read* the constitution with judgment; it is **not** a
+   deterministic extraction of the whole tree). Ground **only** in the surfaces present: the
+   repo's **purpose and role**, its **major modules/boundaries** (from topology +
+   architecture), its **public contract**, and **ownership**. **Never claim knowledge of code
+   you did not read** — the mental model is the repo's identity, not its internals. If the
+   constitution is **thin** (say, only a README + topology), the mental model is thin — **say
+   so, don't invent purpose**. Author findability facets in a reader's vocabulary
+   (`Covers`: "what is `<repo>` for", "who owns it", "what does it expose", "where does it
+   deploy").
+3. **Staleness is automatic and correct.** The mental model grounds in the repo-source, whose
+   `content_hash` is over the constitution — so it goes stale on a **constitutional amendment**
+   (re-architecture, repurpose, split/merge, ownership) and **stays fresh under implementation
+   churn**. On amendment, re-`capture-repo` (a new version) → the mental model is flagged stale
+   (L4) → heal it with `regenerate`.
 
 ## Invariants — never violate (the Core/linter enforce them)
 
@@ -224,6 +315,11 @@ optional; the base loses nothing without it. But *don't hide the degradation* (�
 `find` or `search` only when you specifically want just one. It unions the two —
 semantic candidates (meaning) **and** `find` hits (literal), deduped and each tagged
 with its `source` — so you never miss a synonym *or* an exact token in one call.
+**This is the general rule for *routing* too** — locate where an answer lives (over the
+resource landscape or anywhere) with `retrieve`, not bare `find`. `find` is substring-only
+and brittle (a query's words must appear literally; it false-positives on stray tokens);
+`retrieve` adds the semantic hit and still degrades to `find` for free, so it's the safe
+default everywhere.
 
 Its value over "call `search`, and if it errors call `find`" is that the fallback is
 **mechanical, not yours to remember**: `retrieve` never raises on a down backend and
@@ -294,8 +390,14 @@ of `ask`/`synthesize`. Odin is the scribe, not the author.
      `ingest`** a real source so a future answer is grounded. Refuse only when even
      a walled-off answer would mislead. **Never silently blend** model-knowledge
      into a cited answer.
-3. **Too thin?** If memory can't support a good answer, say so and offer to
-   `explore` — do **not** fabricate. "I don't know yet" is a valid, valuable answer.
+3. **Too thin? Surface the gap and offer to dispatch Huginn (ADR-0021).** If memory
+   can't support a good answer, say so and **offer to `explore`** — informed by the
+   survey (which connector/source could hold the missing piece), **by offer, never
+   auto-reaching**. Acquire the missing piece **neutrally** — not "find support for
+   X" (that manufactures agreement) — and stay willing to answer *differently* if the
+   fetched source doesn't cooperate. Complete the answer only after a
+   separately-consented `ingest`. Do **not** fabricate; "I don't know yet" is a
+   valid, valuable answer.
 4. **Assurance — surface the weakest link (ADR-0011).** Roll up two orthogonal
    axes into one honest line, taking the **weakest** value among the docs you
    cited:
@@ -368,6 +470,15 @@ sources (ADR-0009). Full behavior: `docs/odin/SKILLS.md` §5.
    - **Drop unsupported proposals — don't narrate them.** A connection the sources
      don't back is not surfaced. Never assert a link on the authority of a
      *summary* (that's chaining, I3 — the Core rejects it anyway).
+   - **Incomplete ≠ unsupported — surface the gap, offer to explore (ADR-0021).** A
+     connection the sources don't *yet* support may be **wrong** (drop it) or merely
+     **incomplete** — real, with one leg simply missing from memory. For the
+     incomplete case, don't silently drop it: **surface the gap and offer to send
+     Huginn** to fetch the missing leg — a third path beside ground-it and drop-it,
+     closing inward discovery back into outward. Acquire **neutrally** and stay
+     willing to **dissolve** the connection if the fetched source doesn't support it
+     (ADR-0015) — a dispatch sent to "confirm a hunch" manufactures agreement.
+     Crystallize only after a separately-consented `ingest` supplies the leg.
    - **The composition can lie even when every span is true.** Accurately-cited
      bricks can still build an arch the sources never state — e.g. placing an
      unrelated consequence clause under "why this breach matters" asserts a
@@ -431,12 +542,29 @@ is cheap and reversible *because* it commits nothing.
 
 1. **Precondition.** Locate the Muninn (offer `init` if none, as at the top). The
    base gives dedup context, and the terminal act is an `ingest` offer.
-2. **Reach — adapter-native, uncapped.** The connector is whatever **MCP/tool you
-   already have** available and authorized — there is **no ODIN connector registry**
-   and Odin holds no credentials (ADR-0020 §2). If you **can't reach** the target,
-   say so plainly and do nothing — no partial reach, no silent failure. Don't cap
-   the crawl by rule: reason about what's "enough," and let the user send you back
-   for more; an over-broad reach only wastes time (nothing is committed).
+2. **Survey, then reach (ADR-0021).** *Before* reaching, **survey** what you can
+   reach and reason which connector/source fits the need. Capability knowledge comes
+   from three places: **(a)** your available **MCP/tool self-descriptions** (the
+   mechanism — "this is a Drive/web connector"); **(b)** the **user's steer** ("the
+   contracts live in Drive"); **(c)** the durable **resource-landscape layer** in the
+   `scope: global` hub (SPEC §5.6) — grounded docs describing what systems/connectors/
+   **repos** exist and what each holds ("vendor comms live in Slack #vendor"; a repo
+   **mental model** = what that codebase is *for*). These are ordinary grounded facts,
+   **never connector infrastructure**, so **read** them to route — run `… connectors <root>`
+   for the computed **roster** of connectors your world touches (origin-union + asserted;
+   T-070). When the layer is thin, *offer to build it*: a repo mental model, or a landscape
+   note that **asserts** a connector via `… derive … --connector <system>=<ref>`. The
+   survey is a **transient reasoning act,
+   not a stored registry** (survey ≠ registry — same content, opposite
+   ownership/lifetime). It also **pre-flights the candidate set** — reachability,
+   redirects, and dedup-preview *across the whole set before ingest* — so a
+   404/403/redirect surprises you **once, up front**, not one-by-one mid-loop.
+   Then **reach — adapter-native, uncapped:** the connector is whatever **MCP/tool
+   you already have** and authorized — **no ODIN registry**, no held credentials
+   (ADR-0020 §2). **Can't reach it?** Say so plainly and do nothing — no partial
+   reach, no silent failure. Don't cap the crawl by rule: reason about what's
+   "enough," and let the user send you back for more; an over-broad reach only wastes
+   time (nothing is committed).
 3. **Discover** candidate sources from the target — transient, **write nothing.**
 4. **Dedup-preview each candidate via the Core** (you **never** compute a hash —
    fabrication risk; hashing is deterministic Core work):

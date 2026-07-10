@@ -20,6 +20,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import muninn_lint  # noqa: E402
 import extractors  # noqa: E402  (the document-processing extension point, ADR-0010)
+import repo_constitution  # noqa: E402  (constitution enumerator for repo-sources, ADR-0028)
 from muninn_lint import (  # noqa: E402  (shared model + hashing)
     Linter,
     TEXT_SUFFIXES,
@@ -359,6 +360,34 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
             "content_hash": h, "canonical": canonical_name}
 
 
+def capture_repo(root, id, repo_path, *, origin_ref=None, head=None, when=None,
+                 extra_surfaces=None):
+    """Capture a repository as a REFERENCE-tier source grounded in its **constitution**
+    (ADR-0028). The captured text is a deterministic manifest of the repo's intent-bearing
+    surfaces (README, ARCHITECTURE, in-repo ADRs, public contract, identity manifests,
+    top-level shape) — **not** its full tree, **not** HEAD. So the source's `content_hash`
+    — and any mental model an adapter later grounds in it — changes on a *constitutional
+    amendment* (re-architecture / repurpose / split-merge / ownership) and stays flat under
+    implementation churn. Building the manifest is a faithful transform; the mental-model
+    *inference* is the adapter's `model-read` (ADR-0028 §6), not this Core step.
+
+    `origin_ref` is the durable locator (a remote URL); defaults to the absolute path.
+    `head` is an optional human-readable commit stamp — recorded in the manifest, never the
+    staleness trigger. Returns the capture result plus the enumerated `surfaces`.
+    """
+    manifest, surfaces = repo_constitution.build_manifest(
+        repo_path, head=head, extra_surfaces=extra_surfaces)
+    origin = {"system": "repo",
+              "ref": origin_ref or str(Path(repo_path).resolve()),
+              "recoverable": True}
+    res = capture(root, id, manifest, origin=origin, tier="reference",
+                  capture_reason="repo constitution — authoritative copy is the live repo",
+                  when=when or _now())
+    res["surfaces"] = [{"label": s["label"], "paths": s["paths"], "hash": s["hash"]}
+                       for s in surfaces]
+    return res
+
+
 def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
                 origin_ref=None):
     """Dry-run dedup: report a candidate's status vs memory **without writing**
@@ -618,9 +647,36 @@ _TYPE_DIR = {"summary": "summaries", "entity": "entities", "concept": "concepts"
              "question": "questions", "insight": "insights"}
 
 
+def stamp_derived(root):
+    """Backfill: stamp `self_hash` on every derived doc that lacks one, from its CURRENT
+    content — the lightweight self-heal for a base whose docs predate self-hashing (no
+    model, no content change, faithful). Idempotent. **Never re-stamps a doc that already
+    has a self_hash** — a mismatch there is a real out-of-band edit for L19 to flag, not
+    something to launder by overwriting. Returns {stamped, skipped}."""
+    root = Path(root)
+    stamped, skipped = 0, 0
+    for dirname in muninn_lint.DERIVED_DIRS:
+        d = root / dirname
+        if not d.is_dir():
+            continue
+        for md in sorted(d.glob("*.md")):
+            text = md.read_text(encoding="utf-8")
+            fm, body = muninn_lint.split_frontmatter(text)
+            if fm is None or "self_hash" in fm:
+                skipped += 1
+                continue
+            fm["self_hash"] = muninn_lint.derived_content_hash(
+                fm.get("title"), fm.get("abstract"), body or "")
+            tmp = md.parent / f".{md.name}.tmp"
+            tmp.write_text("---\n" + _dump_yaml(fm) + "---\n" + (body or ""), encoding="utf-8")
+            tmp.replace(md)
+            stamped += 1
+    return {"stamped": stamped, "skipped": skipped}
+
+
 def write_derived(root, id, *, body, sources, type="summary", title,
                   abstract=None, status="current", see_also=None,
-                  derivation=None, derived_at="2026-07-03T00:10:00Z"):
+                  derivation=None, derived_at="2026-07-03T00:10:00Z", connectors=None):
     """Write a derived document with provenance — the write half of derivation.
 
     The adapter supplies judgment (title/abstract/body, and *which* sources);
@@ -656,9 +712,21 @@ def write_derived(root, id, *, body, sources, type="summary", title,
     fm["derived_at"] = derived_at
     if see_also:
         fm["see_also"] = see_also
+    # A landscape doc may ASSERT connectors it references but hasn't ingested from
+    # (ADR-0028 / ADR-0021 §2) — an adapter-authored `[{system, ref}]` list. Ingested
+    # connectors need not be listed here; they come free from source `origin` in the
+    # connector projection. Not self-hashed content (a machine/landscape field).
+    if connectors:
+        fm["connectors"] = [c for c in connectors if isinstance(c, dict) and c.get("system")]
     fm["status"] = status
     if derivation:
         fm["derivation"] = derivation
+    # Always stamp a self-hash over the authored content (ADR-0029): cheap, always-accurate
+    # metadata that every write (incl. `regenerate`) keeps current. The muninn.yml
+    # `integrity.derived_self_hash` flag governs only whether the linter ENFORCES it (L19).
+    # Decoupling stamp from enforce makes enabling enforcement later instant and complete —
+    # every doc is already stamped — and never false-positives on a legit regenerate.
+    fm["self_hash"] = muninn_lint.derived_content_hash(title, abstract, body)
 
     body_text = body if body.endswith("\n") else body + "\n"
     doc_text = "---\n" + _dump_yaml(fm) + "---\n" + body_text
@@ -950,6 +1018,57 @@ def resolve_scope(root, project=None):
             "global_views": sorted(global_views), "members": sorted(resolved)}
 
 
+#: origin systems that are LOCAL, not reachable connectors — skipped in the projection.
+_LOCAL_ORIGINS = {"file", "chat"}
+
+
+def connector_projection(root):
+    """Project the distinct connectors the **resource-landscape layer** references
+    (ADR-0021 §2, ADR-0028) — a deterministic, faithful view (no inference, no registry):
+    the computed *skeleton* to the landscape docs' authored *flesh*. Over every
+    `scope: global` view's members it unions two grounded inputs:
+
+      (a) the `origin.{system, ref}` of **source** members — the connectors your durable
+          knowledge came *from* (a repo mental model's source contributes `repo:<url>` for
+          free); local origins (`file`, `chat`) are not connectors and are skipped.
+      (b) an explicit `connectors: [{system, ref}]` field on **derived** members — for a
+          connector a landscape doc *asserts* but hasn't ingested from ("contracts in Drive").
+
+    Returns `[{system, ref, referenced_by: [ids]}]`, sorted. Like `index.md`, it is a pure
+    projection of frontmatter — it goes stale like any projection, never a durable registry."""
+    from collections import defaultdict
+    root = Path(root)
+    linter = Linter(root)
+    linter.load()
+    by_id = {d.id: d for d in linter.docs}
+
+    members: list[str] = []
+    for d in linter.docs:
+        if d.kind == "project" and d.data.get("scope") == "global":
+            for m in (d.data.get("members") or []):
+                if m not in members:
+                    members.append(m)
+
+    conns: dict = defaultdict(set)
+    for mid in members:
+        d = by_id.get(mid)
+        if d is None:
+            continue
+        if d.kind == "source":                                   # (a) origin-union
+            origin = d.data.get("origin") or {}
+            system = origin.get("system")
+            if system and system not in _LOCAL_ORIGINS:
+                conns[(system, origin.get("ref"))].add(mid)
+        for c in (d.data.get("connectors") or []):               # (b) explicit assertions
+            if isinstance(c, dict) and c.get("system"):
+                conns[(c["system"], c.get("ref"))].add(mid)
+
+    out = [{"system": s, "ref": r, "referenced_by": sorted(ids)}
+           for (s, r), ids in conns.items()]
+    out.sort(key=lambda c: (c["system"], c["ref"] or ""))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # init — scaffold a new Muninn (operational verb; deterministic, SPEC §3, §5.8)
 # --------------------------------------------------------------------------- #
@@ -969,7 +1088,13 @@ def init(root, name=None, when=None):
     for d in _LAYOUT:
         (root / d).mkdir(exist_ok=True)
     name = name or root.name
-    manifest.write_text(f"muninn: {FORMAT_VERSION}\nname: {name}\ncreated_at: {when}\n", encoding="utf-8")
+    # The integrity knob is written present-but-off, so it is discoverable in the file
+    # (self-documenting) rather than an invisible absent key (ADR-0029). Off by default;
+    # flip to true — or ask the adapter to — to enforce L19 (out-of-band derived-doc edits).
+    manifest.write_text(
+        f"muninn: {FORMAT_VERSION}\nname: {name}\ncreated_at: {when}\n"
+        f"integrity:\n  derived_self_hash: false  # opt-in: enforce L19 (out-of-band edits)\n",
+        encoding="utf-8")
 
     # MUNINN.md from the scaffold template: drop the leading comment, fill tokens.
     tmpl = (Path(__file__).resolve().parent / "templates" / "MUNINN.md").read_text(encoding="utf-8")
@@ -1074,11 +1199,34 @@ def main(argv=None):
     pd.add_argument("--type", default="summary")
     pd.add_argument("--source", action="append", required=True, dest="sources")
     pd.add_argument("--derivation", choices=sorted(muninn_lint.DERIVATION_VALUES))
+    pd.add_argument("--connector", action="append", default=[], metavar="system[=ref]",
+                    help="assert a connector this landscape doc references (repeatable; T-070)")
     pd.add_argument("--file")
 
     for name in ("index", "fingerprint", "lint"):
         sp = sub.add_parser(name, help=f"{name} the Muninn")
         sp.add_argument("root")
+
+    pst = sub.add_parser("stamp", help="backfill derived-doc self_hashes (self-heal a base "
+                                       "whose docs predate self-hashing; ADR-0029)")
+    pst.add_argument("root")
+
+    pcr = sub.add_parser("capture-repo",
+                         help="capture a repo as a constitution-grounded reference source "
+                              "(README/ARCHITECTURE/ADRs/contract/manifests/topology; ADR-0028)")
+    pcr.add_argument("root")
+    pcr.add_argument("id")
+    pcr.add_argument("repo", help="path to the repository")
+    pcr.add_argument("--origin-ref", help="durable locator (remote URL); defaults to abs path")
+    pcr.add_argument("--head", help="optional commit stamp (recorded, never the staleness trigger)")
+    pcr.add_argument("--surface", action="append", default=[], metavar="LABEL=glob[,glob...]",
+                     help="adapter-chosen surface (repeatable) — AUGMENTS the default floor; "
+                          "e.g. --surface deploy=Dockerfile,netlify.toml (ADR-0028 §6)")
+
+    pconn = sub.add_parser("connectors",
+                           help="project the distinct connectors the scope:global landscape "
+                                "references (origin-union + explicit fields; ADR-0021 §2 / T-070)")
+    pconn.add_argument("root")
 
     pu = sub.add_parser("usage", help="report the disposable usage ledger (ADR-0027)")
     pu.add_argument("root")
@@ -1166,9 +1314,14 @@ def main(argv=None):
         print(source_status(args.root, args.id))
     elif args.cmd == "derive":
         body = _read_body(args)
+        connectors = []
+        for spec in args.connector:                    # system[=ref] -> {system, ref}
+            system, _, ref = spec.partition("=")
+            connectors.append({"system": system.strip(), "ref": ref.strip() or None})
         res = write_derived(args.root, args.id, body=body, sources=args.sources,
                             type=args.type, title=args.title, abstract=args.abstract,
-                            derivation=args.derivation, derived_at=_now())
+                            derivation=args.derivation, derived_at=_now(),
+                            connectors=connectors or None)
         log_usage(args.root, "derive",
                   bytes_in=sum(_source_bytes(args.root, s) for s in args.sources),
                   bytes_out=len(body.encode("utf-8")), id=args.id, type=args.type)
@@ -1184,6 +1337,21 @@ def main(argv=None):
                               evidence=args.evidence, amend=args.amend, when=_now()))
     elif args.cmd == "index":
         print(regenerate_index(args.root))
+    elif args.cmd == "stamp":
+        print(stamp_derived(args.root))
+    elif args.cmd == "capture-repo":
+        extra = []
+        for spec in args.surface:                      # LABEL=glob[,glob...] -> (label, [globs])
+            label, _, globs = spec.partition("=")
+            extra.append((label.strip(), [g.strip() for g in globs.split(",") if g.strip()]))
+        print(capture_repo(args.root, args.id, args.repo, origin_ref=args.origin_ref,
+                           head=args.head, extra_surfaces=extra or None))
+    elif args.cmd == "connectors":
+        conns = connector_projection(args.root)
+        for c in conns:
+            ref = f" {c['ref']}" if c["ref"] else ""
+            print(f"{c['system']}{ref}  <- {', '.join(c['referenced_by'])}")
+        print(f"({len(conns)} connector(s) across the scope:global landscape)")
     elif args.cmd == "usage":
         rep = usage_report(args.root)
         for op, agg in sorted(rep["by_op"].items()):
