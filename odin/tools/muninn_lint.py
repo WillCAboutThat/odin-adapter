@@ -30,6 +30,10 @@ DERIVED_DIRS = {"summaries", "entities", "concepts", "questions", "insights"}
 DERIVATION_VALUES = {"extracted", "model-read", "synthesis"}  # §5.2 / ADR-0011 (L14)
 SCOPE_VALUES = {"project", "global"}  # §5.6 / ADR-0002 (L16); absent defaults to 'project'
 DECISION_STATUS_VALUES = {"proposed", "accepted"}  # §5.5 / ADR-0019 (L17)
+# L18 summary-compression: a summary shorter than this many chars of source text is
+# exempt — a small table or short note is *already* summary-length, so its derived doc
+# is mostly findability facets, not restated content, and may legitimately run longer.
+SUMMARY_COMPRESS_FLOOR = 500
 
 # Assurance ranking of a derivation, strongest (closest to deterministic ground)
 # first. `ask` rolls the *weakest* rung among the docs it cites into one
@@ -382,6 +386,25 @@ class Linter:
         for link in d.data.get("see_also") or []:
             if link not in self.by_id:
                 self.error("L7", f"see_also link '{link}' resolves to nothing", d.path)
+        # L18 summary-compression: a summary must be shorter than its source(s). A
+        # summary *compresses* — restating a source at length is paraphrase-bloat, not a
+        # summary; enrich for findability (reader-vocabulary facets), not length. Advisory
+        # (warn): the fix is a judgment call (regenerate tighter), never a silent edit (I5).
+        # Exempt: sources with no text layer (a model-read of an image — nothing to be
+        # shorter than) and already-terse sources below SUMMARY_COMPRESS_FLOOR.
+        if d.type == "summary":
+            src_len = sum(
+                len(source_text(ref.path, ref.data))
+                for s in sources
+                if (ref := self.by_id.get(s.get("id") if isinstance(s, dict) else s))
+                is not None and ref.kind == "source")
+            if src_len >= SUMMARY_COMPRESS_FLOOR:
+                _, body = split_frontmatter(d.path.read_text(encoding="utf-8"))
+                summary_len = len(d.data.get("abstract") or "") + len(body or "")
+                if summary_len > src_len:
+                    self.warn("L18", f"summary ({summary_len} chars) is longer than its "
+                              f"source ({src_len} chars) — summaries compress; enrich for "
+                              f"findability, not length", d.path)
 
     def _check_source_summaries(self):
         """L15 source-has-summary (ADR-0013): every source is grounded by >=1

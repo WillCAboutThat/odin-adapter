@@ -113,6 +113,12 @@ Find a `muninn.yml` at or above the working directory (or a path the user gives)
      (the no-fabrication rule still binds — an image-only fact stays out). Sanity-
      check by running `find` on a few likely queries; nothing back = under-worded
      digest, not broken retrieval.
+   - **Compress — shorter than the source (L18).** A summary must not run *longer*
+     than its source: enrich for findability, don't restate the content at length.
+     A source that's already terse (a small table, a short note) is basically a
+     summary already — give it a tight abstract + a reader-vocabulary facet and
+     stop; don't stretch it. The linter warns (L18) on a bloated summary; a
+     `model-read` of a textless image is exempt (no source text to be shorter than).
 4. **Write** each derived doc via the Core (it copies the current source hash and
    refuses chaining):
    `… derive <root> <id> --type summary --title "<t>" --abstract "<a>" --source src-<slug> [--derivation model-read] --file <bodyfile>`
