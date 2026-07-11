@@ -110,6 +110,13 @@ Whenever you open this base, before acting:
    (`grep "] lint |" log.md | tail -1`).
 3. If they **differ**, the base changed since it was last checked — tell the user
    plainly and suggest `lint`. If they **match**, stay quiet.
+4. **Proactive synthesize (on load).** If the change **added new sources**, you may
+   also **offer** — once — to look for the connections they form with existing
+   memory: *"N new sources since last check; want me to look for connections?"*
+   **Offer only; never run `synthesize` unasked** (it spends real tokens, and
+   proposing-not-writing extends to proposing-not-scanning). On a yes, run the normal
+   `synthesize` flow. Skip the offer if only derived docs changed — a `regenerate`
+   adds nothing new to connect.
 
 This is a change-based nudge, not a time-based one. A specific tool may make it
 deterministic via a session-start hook.

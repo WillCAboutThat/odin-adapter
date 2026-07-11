@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.9"
+# ///
+# ^ PEP-723 (ADR-0031): launched via `uv run --script`, cross-platform, no host
+#   `python3` needed. Stdlib-only, so no dependencies are declared.
 """SessionStart hook — best-effort, NON-BLOCKING warm of the semantic index (T-092).
 
 The ingest-boundary warm (T-091) covers *ingest → retrieve*; this covers the other
@@ -5,6 +10,16 @@ flow — *open a cold session → query first* — by loading the embedding mode
 at session start, so the user's first `retrieve`/`search` doesn't pay the ~27s cold-load.
 `retrieve` self-heals regardless (T-090), so this only ever *removes latency*, never a
 correctness step.
+
+KNOWN LIMITATION (2026-07-11, T-020 research): `${CLAUDE_PLUGIN_ROOT}` is **not
+expanded inside SessionStart hooks** on current Claude Code (an open upstream bug —
+anthropics/claude-code #27145 / #39550 / #43380), so `hooks.json`'s launch command
+`uv run --script "${CLAUDE_PLUGIN_ROOT}/hooks/warm_index.py"` resolves to an empty
+prefix and this hook is **silently inert on marketplace installs** until that bug is
+patched. Impact is only the cold-load latency above (a comfort optimization, never
+correctness — retrieve self-heals). No in-repo workaround exists: a SessionStart hook
+has no reliable way to locate its own bundled script. Re-enables automatically when
+upstream fixes the variable; tracked with the (also-blocked) freshness hook, T-020.
 
 Three properties make it safe to ship to every plugin user:
 

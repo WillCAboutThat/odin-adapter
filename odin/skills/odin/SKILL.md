@@ -56,15 +56,28 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
 Find a `muninn.yml` at or above the working directory (or a path the user gives).
 - **Found:** use it. Recompute the fingerprint and, if it differs from the last
   `lint` entry in `log.md`, say the base changed and suggest a lint.
-- **None:** do **not** silently create one. Offer `init`, and **confirm where it
-  will live** — the user must always know where their Muninn is. On yes:
-  `python <ODIN>/tools/muninn_core.py init <path> --name "<name>"`, then continue. In
-  that same confirmation, mention the one setting worth knowing: **integrity
-  self-hashing (L19)** flags any out-of-band edit to a derived doc; it is **off by
-  default** and worth enabling for shared, multi-writer, or non-git bases. It is
-  self-documented in `muninn.yml` (`integrity.derived_self_hash`); the user can flip it
-  there or just ask you to — and you can `stamp` an existing base to bring older docs
-  under it. Don't gate `init` on an answer; inform, and let off-by-default proceed.
+- **None:** do **not** silently create one. Offer `init`, and **resolve + confirm
+  where it will live** — the user must always know where their Muninn is. Default the
+  target to the working directory; use a path the user names. On yes:
+  `python <ODIN>/tools/muninn_core.py init <path> --name "<name>"`.
+  - **Tool-repo guard (ADR-0032).** `init` returns **`action: "warn"`** and writes
+    nothing when the target is inside ODIN's own checkout — a knowledge base lives
+    **separately** from the tool (ADR-0002). Relay the warning and pick another
+    location; only re-run with `--allow-tool-root` if the user *means* to init here
+    (e.g. dogfooding the repo).
+  - **Non-interactive / headless.** If you can't ask (a scripted run), a missing
+    Muninn is an **error, not a silent create** — unless consent was explicit (a prior
+    `init`, or `ingest --init <path>`). Never scaffold a base at a location nobody chose.
+  - **Orient, then continue (ADR-0032).** After a *triggered* init, **before** the
+    ingest report, tell the user in a line or two: **where** the base now lives, that
+    it's durable Markdown + git separate from the tool, sources-vs-derived, and that
+    its `MUNINN.md` explains it. A raven they can't find is no good.
+  - **Mention the one setting worth knowing:** **integrity self-hashing (L19)** flags
+    any out-of-band edit to a derived doc; it is **off by default** and worth enabling
+    for shared, multi-writer, or non-git bases. Self-documented in `muninn.yml`
+    (`integrity.derived_self_hash`); the user can flip it there or ask you to — and you
+    can `stamp` an existing base to bring older docs under it. Don't gate `init` on an
+    answer; inform, and let off-by-default proceed.
 
 ## First-run setup — bootstrap the resource landscape from what you already know
 
@@ -168,7 +181,10 @@ just deferred to the moment you learn the connector exists.
      the summary in the **reader's vocabulary, not just the source's** — add
      `Covers`/`Answers` facets that phrase the questions someone would actually
      ask, in their words: a "from the shelter" record should also say **adopted**;
-     a "Birthday" should also answer **age**. Only words grounded in *this* source
+     a "Birthday" should also answer **age**. **Carry the inflected form the reader
+     types, too** — `find` is *literal* substring, not stemmed, so "rescue" won't
+     match a `find("rescued")`; author **rescued** alongside the stem. Only words
+     grounded in *this* source
      (the no-fabrication rule still binds — an image-only fact stays out). Sanity-
      check by running `find` on a few likely queries; nothing back = under-worded
      digest, not broken retrieval.
@@ -456,6 +472,14 @@ sources; `synthesize` looks *inward* for new **connections** already latent in
 memory. It answers the question the user *didn't know to ask* — shared entities,
 date/deadline dependencies, contradictions, causal or thematic links across
 sources (ADR-0009). Full behavior: `docs/odin/SKILLS.md` §5.
+
+**Proactive (on load).** Beyond user-invocation, offer this on load when the base
+*grew*: the freshness ritual (`MUNINN.md` / ADR-0005) recomputes the fingerprint, and
+if the change **added new sources**, **offer** — once — *"N new sources since last
+check; want me to look for connections they form with what's already here?"* Run the
+flow (steps 1–6) **only on a yes — never synthesize unasked** (it's one of your real
+token spends; proposing-not-writing extends to proposing-not-scanning). Skip the offer
+on a derived-only change (a `regenerate` adds nothing new to connect).
 
 1. **Resolve scope.** Ask the Core for the working set:
    `… resolve <root> [prj-<slug>]` — it returns the member ids to reason over.

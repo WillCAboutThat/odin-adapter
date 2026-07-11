@@ -1,3 +1,11 @@
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["pyyaml"]
+# ///
+# ^ PEP-723 inline metadata (ADR-0031): `uv run --script` provisions Python + pyyaml
+#   cross-platform, so the plugin's `.mcp.json` launches this with `command: uv` and
+#   needs no `python3` on the host. The sibling Core modules resolve via the
+#   sys.path.insert below (uv's isolated env doesn't block local imports).
 """Odin Core MCP server — a second, tool-neutral transport over the Core ops
 (ADR-0022, T-071).
 

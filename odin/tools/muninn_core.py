@@ -526,6 +526,34 @@ def _blurb(title, abstract):
     return f"{title} — {abstract}" if abstract else title
 
 
+def _index_markers(d, current_by_source):
+    """The compact coded metadata layer for a derived doc's index line — the
+    card-catalogue 'call number' (T-056, ADR-0011/0014): the human title+abstract
+    stays skimmable, and this legible marker set serves the AI librarian. A pure
+    deterministic projection — assurance rung + corroboration breadth from
+    frontmatter, staleness via the *same* recorded-vs-current source-hash check the
+    linter uses for L4, `global` from scope. No authored prose.
+
+    Order: `<rung> · <N source(s)> · [stale]`. Rung and count are always present
+    (a uniform field an AI can rely on); `stale` appears only when true (surface the
+    exception, stay quiet otherwise — the freshness posture). (`scope: global` lives
+    on project pages, not derived docs, so it is marked in the Projects group.)"""
+    parts = [d.data.get("derivation") or "extracted"]          # assurance rung
+    srcs = d.data.get("sources") or []
+    if srcs:
+        parts.append(f"{len(srcs)} source" + ("s" if len(srcs) != 1 else ""))
+    stale = d.data.get("status") == "stale"
+    for s in srcs:
+        recorded = s.get("hash") if isinstance(s, dict) else None
+        current = current_by_source.get(s.get("id") if isinstance(s, dict) else s)
+        if recorded and current and recorded != current:
+            stale = True
+            break
+    if stale:
+        parts.append("stale")
+    return " · ".join(parts)
+
+
 def regenerate_index(root):
     """Rebuild index.md as a pure projection of document frontmatter (SPEC §5.3).
 
@@ -545,6 +573,9 @@ def regenerate_index(root):
 
     # source id -> the derived doc that covers it (prefer a summary), for its blurb
     cover = _cover_map(derived)
+    # source id -> its current content_hash, so the derived-doc markers can flag
+    # staleness (recorded vs current) exactly as the linter's L4 does.
+    current_by_source = {d.id: d.data.get("content_hash") for d in sources}
 
     def rel(p):
         return p.relative_to(root).as_posix()
@@ -569,7 +600,10 @@ def regenerate_index(root):
             # source.md that binary sources don't have (ADR-0010).
             canonical = current_canonical(d.path, d.data)
             target = f"sources/{d.id}/{canonical.name}" if canonical else f"sources/{d.id}/"
-            lines.append(f"- [{d.id}]({target}) — {desc}")
+            # tier marker — a reference-tier source is authority-not-storage (can't be
+            # re-verified byte-for-byte); flag it, leave full-capture (the default) bare.
+            tier = " · reference" if d.data.get("capture") == "reference" else ""
+            lines.append(f"- [{d.id}]({target}) — {desc}{tier}")
         lines.append("")
     for label, typ in _DERIVED_GROUPS:
         items = sorted((d for d in derived if d.type == typ), key=lambda x: x.id)
@@ -577,14 +611,19 @@ def regenerate_index(root):
             continue
         lines.append(f"## {label}")
         for d in items:
-            lines.append(f"- [{d.id}]({rel(d.path)}) — {_blurb(d.data.get('title', d.id), d.data.get('abstract'))}")
+            blurb = _blurb(d.data.get('title', d.id), d.data.get('abstract'))
+            markers = _index_markers(d, current_by_source)
+            suffix = f"  · {markers}" if markers else ""
+            lines.append(f"- [{d.id}]({rel(d.path)}) — {blurb}{suffix}")
         lines.append("")
     for label, group in (("Projects", projects), ("Decisions", decisions)):
         if not group:
             continue
         lines.append(f"## {label}")
         for d in group:
-            lines.append(f"- [{d.id}]({rel(d.path)}) — {d.data.get('title', d.id)}")
+            # mark the always-in-scope global hub (project pages only carry scope)
+            scope_mark = "  · global" if d.data.get("scope") == "global" else ""
+            lines.append(f"- [{d.id}]({rel(d.path)}) — {d.data.get('title', d.id)}{scope_mark}")
         lines.append("")
 
     index = root / "index.md"
@@ -872,6 +911,49 @@ def write_project(root, id, *, title=None, add_members=None, scope=None,
             "members": members, "scope": scope}
 
 
+def reproject(root, when=None):
+    """Re-render every project page from current state — the ADR-0018 follow-ons (T-057).
+
+    A regenerate-class maintenance pass (like `stamp`), CLI/operational, idempotent:
+
+    - **Migrate a pre-hub base:** if no `scope: global` view exists (a Muninn created
+      before ADR-0018), seed the canonical `global` hub — exactly what `init` seeds now
+      — so the always-in-scope layer is present. `resolve_scope` was always correct
+      without it; this makes the *page* layer consistent too.
+    - **Reproject on global-set change:** each non-global page's **Always in scope**
+      pointer is a *write-time* projection (SPEC §5.6), so a hand-authored *second*
+      `scope: global` view leaves older pages stale until re-rendered. Re-running
+      `write_project` on every page recomputes the pointer (and refreshes each member's
+      projected blurb — the sibling ADR-0017 'refresh blurbs when a member changes'
+      case) from current frontmatter. No authored content is touched; the body is a
+      pure projection.
+
+    Returns {seeded_global, reprojected: [ids]}."""
+    root = Path(root)
+    when = when or _now()
+    linter = Linter(root)
+    linter.load()
+    projects = [d for d in linter.docs if d.kind == "project"]
+
+    seeded = False
+    if not any(d.data.get("scope") == "global" for d in projects):
+        write_project(root, "global", title="Global context",
+                      description="Standing context that applies to every project — "
+                                  "always in scope.",
+                      scope="global", when=when)
+        seeded = True
+        linter = Linter(root)
+        linter.load()
+        projects = [d for d in linter.docs if d.kind == "project"]
+
+    reprojected = []
+    for d in sorted(projects, key=lambda x: x.id):
+        write_project(root, d.id, when=when)   # re-render in place; recomputes the pointer + blurbs
+        reprojected.append(d.id)
+    regenerate_index(root)
+    return {"seeded_global": seeded, "reprojected": reprojected}
+
+
 # --------------------------------------------------------------------------- #
 # record_decision — the owner records a decision (AUTHORED, not derived; ADR-0019)
 # --------------------------------------------------------------------------- #
@@ -1082,14 +1164,45 @@ _LAYOUT = ("sources", "summaries", "entities", "concepts", "questions",
            "insights", "projects", "decisions")
 
 
-def init(root, name=None, when=None):
+_TOOL_ROOT_SENTINEL = ".odin-tool-root"
+
+
+def _tool_root_above(target) -> Path | None:
+    """The nearest dir at/above `target` carrying the ODIN tool-root sentinel, else
+    None. The deterministic half of the T-032 guard (ADR-0032): a Muninn must live
+    separately from ODIN-the-tool (ADR-0002). The sentinel is committed to ODIN's dev
+    repo root and is NOT copied into the shipped plugin bundle, so a real user running
+    from their own folder never trips it; only a dev checkout does. `target` need not
+    exist yet — we walk its resolved path's parents."""
+    p = Path(target).resolve()
+    for cand in (p, *p.parents):
+        if (cand / _TOOL_ROOT_SENTINEL).exists():
+            return cand
+    return None
+
+
+def init(root, name=None, when=None, allow_tool_root=False):
     """Scaffold a Muninn: manifest, MUNINN.md (from the template), the standard
-    layout, index.md, log.md. No-op with a report if already a Muninn."""
+    layout, index.md, log.md. No-op with a report if already a Muninn.
+
+    **Soft-warn tool-repo guard (T-032/ADR-0032):** if the target sits inside ODIN's
+    own checkout (sentinel found) and `allow_tool_root` is not set, return an
+    `action: "warn"` result and write **nothing** — the adapter surfaces it and, on the
+    user's consent, re-calls with `allow_tool_root=True`. Surface-don't-block
+    (principle 5): the consented op still proceeds."""
     root = Path(root)
     when = when or _now()
     manifest = root / "muninn.yml"
     if manifest.exists():
         return {"action": "noop", "path": str(root), "reason": "already a Muninn"}
+    if not allow_tool_root:
+        tr = _tool_root_above(root)
+        if tr is not None:
+            return {"action": "warn", "path": str(root), "tool_root": str(tr),
+                    "warning": f"target is inside the ODIN tool checkout ({tr}/"
+                               f"{_TOOL_ROOT_SENTINEL}); a Muninn should live separately "
+                               f"(ADR-0002). Re-run elsewhere, or pass --allow-tool-root "
+                               f"to scaffold here anyway."}
     root.mkdir(parents=True, exist_ok=True)
     for d in _LAYOUT:
         (root / d).mkdir(exist_ok=True)
@@ -1161,6 +1274,9 @@ def main(argv=None):
     pi = sub.add_parser("init", help="scaffold a new Muninn")
     pi.add_argument("root")
     pi.add_argument("--name")
+    pi.add_argument("--allow-tool-root", action="store_true",
+                    help="scaffold even if the target is inside ODIN's own checkout "
+                         "(overrides the soft-warn tool-repo guard; e.g. dogfooding)")
 
     pc = sub.add_parser("capture", help="capture a source (text via --file/stdin, "
                                         "or original bytes via --source-file)")
@@ -1216,6 +1332,11 @@ def main(argv=None):
     pst = sub.add_parser("stamp", help="backfill derived-doc self_hashes (self-heal a base "
                                        "whose docs predate self-hashing; ADR-0029)")
     pst.add_argument("root")
+
+    prp = sub.add_parser("reproject", help="re-render every project page: seed the global hub "
+                                           "if missing + refresh the Always-in-scope pointer "
+                                           "(ADR-0018 follow-ons; T-057)")
+    prp.add_argument("root")
 
     pcr = sub.add_parser("capture-repo",
                          help="capture a repo as a constitution-grounded reference source "
@@ -1292,7 +1413,7 @@ def main(argv=None):
 
     args = p.parse_args(argv)
     if args.cmd == "init":
-        print(init(args.root, name=args.name))
+        print(init(args.root, name=args.name, allow_tool_root=args.allow_tool_root))
     elif args.cmd == "capture":
         origin = {"system": args.origin_system, "ref": args.origin_ref}
         if args.recoverable is not None:            # explicit override, both paths (T-068)
@@ -1345,6 +1466,8 @@ def main(argv=None):
         print(regenerate_index(args.root))
     elif args.cmd == "stamp":
         print(stamp_derived(args.root))
+    elif args.cmd == "reproject":
+        print(reproject(args.root))
     elif args.cmd == "capture-repo":
         extra = []
         for spec in args.surface:                      # LABEL=glob[,glob...] -> (label, [globs])
