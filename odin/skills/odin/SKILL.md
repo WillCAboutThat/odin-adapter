@@ -25,7 +25,11 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
   Core through its `odin_*` tools — `odin_init`, `odin_capture`, `odin_dedup_check`,
   `odin_source_status`, `odin_derive`, `odin_index`, `odin_find`, `odin_project`,
   `odin_resolve`, `odin_record_decision`, `odin_fingerprint`, `odin_lint`,
-  `odin_reindex`, `odin_search`, `odin_retrieve`, `odin_usage_log`, `odin_refresh`. This is
+  `odin_stamp`, `odin_reproject`, `odin_capture_repo`, `odin_connectors`, `odin_usage`,
+  `odin_stage_candidate`, `odin_list_candidates`, `odin_promote_candidate`,
+  `odin_decline_candidate`, `odin_status`,
+  `odin_reindex`, `odin_search`, `odin_retrieve`, `odin_usage_log`, `odin_refresh` —
+  **every CLI verb has its MCP tool** (T-113: one op registry generates both). This is
   how a plugin install with **no checkout and no `pip install`** reaches the Core, so
   **prefer it**. They are the *same* ops with structured args: a body the CLI takes
   via `--file`/stdin becomes the **`body`** param, `--source-file` becomes the

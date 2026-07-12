@@ -1,6 +1,6 @@
 {
   "name": "odin",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Turn scattered information into a durable, provenance-tracked knowledge base. Bundles the Odin skill (judgment) and the neutral Core MCP server (deterministic, invariant-guaranteeing ops). AI is the enabler, not the substrate — the knowledge persists as Markdown + links + git with no vendor lock-in (ADR-0008).",
   "author": { "name": "Will Carlson" },
   "homepage": "https://github.com/WillCAboutThat/project-odin",

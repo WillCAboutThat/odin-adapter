@@ -15,6 +15,7 @@ Tool-neutral by design: this reads only the on-disk format, no LLM required.
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -524,10 +525,17 @@ class Linter:
             self.error("L8", "no index.md at Muninn root", index)
             return
         text = index.read_text(encoding="utf-8")
+        # Structural, not substring (T-026): a doc "appears in the index" when it
+        # is an actual entry — a Markdown link whose label is the id (exactly what
+        # the §5.3 projection emits). The old substring check false-passed an id
+        # that merely occurred inside a longer id or in prose, and that is not
+        # "index-complete" under any honest reading of the (unchanged) SPEC rule.
+        linked = set(re.findall(r"\[([^\]\n]+)\]\([^)\n]*\)", text))
         listed = {d.id for d in self.docs if d.kind != "manifest"}
         for doc_id in sorted(listed):
-            if doc_id not in text:
-                self.error("L8", f"'{doc_id}' does not appear in index.md", index)
+            if doc_id not in linked:
+                self.error("L8", f"'{doc_id}' has no index.md entry (a link labelled "
+                                 f"with the id)", index)
 
     # -- run ---------------------------------------------------------------- #
     def run(self) -> int:

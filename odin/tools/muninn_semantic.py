@@ -46,7 +46,6 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import muninn_lint  # noqa: E402
 import muninn_core as core  # noqa: E402  (for `retrieve`'s deterministic find floor)
 from muninn_lint import Linter, split_frontmatter  # noqa: E402
 
@@ -311,7 +310,11 @@ def search(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
         use_model = index_model                     # query must match the index
         embed = embed or (lambda texts: ollama_embed(texts, model=use_model, url=url))
         qvec = embed([query])[0]
-        qnorm = math.sqrt(sum(x * x for x in qvec))
+        # math.sumprod (3.12+) is a C-level dot product — ~10× on this hot loop,
+        # zero deps (T-118d); the zip-sum fallback keeps the 3.9 floor working.
+        sumprod = getattr(math, "sumprod",
+                          lambda a, b: sum(x * y for x, y in zip(a, b)))
+        qnorm = math.sqrt(sumprod(qvec, qvec))
         if qnorm == 0:
             return []
         scored = []
@@ -319,7 +322,7 @@ def search(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
             vec = _blob_to_vec(blob)
             if not norm:
                 continue
-            dot = sum(q * v for q, v in zip(qvec, vec))
+            dot = sumprod(qvec, vec)
             scored.append({"id": doc_id, "score": dot / (qnorm * norm),
                            "type": dtype, "title": title, "path": path})
         scored.sort(key=lambda r: r["score"], reverse=True)
@@ -447,6 +450,124 @@ def refresh(root, *, model=None, url=DEFAULT_URL, embed=None):
                 "warning": (f"{st['stale']} doc(s) added/changed since the last embed "
                             f"aren't semantically searchable yet — `find` covers them; "
                             f"reindex when the backend is up ({e})")}
+
+
+# --------------------------------------------------------------------------- #
+# The semantic tier's op registry (T-113) — same declarative shape as
+# muninn_core.OPS; odin_mcp unions the two into ONE MCP surface. Declared here
+# (not in the Core registry) because this module imports muninn_core, and
+# because the tier is inference, not Core (ADR-0027): the Core CLI stays
+# inference-free by design — these four ops' CLI is *this* module's (below).
+# --------------------------------------------------------------------------- #
+_ROOT_P = {"type": "string", "description": "Path to the Muninn root directory.",
+           "required": True, "cli": {"positional": True}}
+_MODEL_P = {"type": "string",
+            "description": "Override the query model; the index's own model still "
+                           "wins for coherence."}
+_URL_P = {"type": "string",
+          "description": "Ollama base URL (default ODIN_OLLAMA_URL or "
+                         "http://localhost:11434)."}
+
+OPS = {
+    "reindex": {
+        "description": "(Re)build the DISPOSABLE semantic vector sidecar "
+                       "(.odin/semantic.db) from the derived layer via a local "
+                       "embedding model (T-087, ADR-0027). Inference, NOT a Core "
+                       "transform — it only accelerates retrieval, never grounds "
+                       "(ADR-0008 boundary). Incremental (re-embeds only changed "
+                       "docs), prunes deleted docs, and rebuilds on a model "
+                       "change. Run after ingest to keep `odin_search` fresh; "
+                       "safe to delete the sidecar anytime — this rebuilds it. "
+                       "Needs a reachable Ollama (ODIN_OLLAMA_URL); returns "
+                       "counts, never touches the base.",
+        "params": {
+            "root": _ROOT_P,
+            "model": {"type": "string",
+                      "description": "Embedding model (default nomic-embed-text / "
+                                     "ODIN_EMBED_MODEL)."},
+            "url": _URL_P,
+        },
+        "handler": lambda root, p: reindex(
+            root, model=p.get("model") or DEFAULT_MODEL,
+            url=p.get("url") or DEFAULT_URL),
+    },
+    "search": {
+        "description": "Semantic retrieval: top-k derived docs by cosine "
+                       "similarity to the query, over the disposable embedding "
+                       "sidecar (T-087). The AI-facing companion to the AI-free "
+                       "`odin_find` floor — it crosses the reader-vocabulary gap "
+                       "find cannot (e.g. 'illness'->the vet exam; ADR-0014, "
+                       "T-044). It only PROPOSES candidates (ADR-0027 §2): each "
+                       "hit is a doc to READ, never a citation, never provenance "
+                       "— ground answers in the actual sources. Empty until "
+                       "`odin_reindex` has run. Prefer `odin_find` when the query "
+                       "is a literal token; reach here for meaning/synonyms.",
+        "params": {
+            "root": _ROOT_P,
+            "query": {"type": "string", "required": True,
+                      "description": "A natural-language / concept query (meaning, "
+                                     "not just tokens)."},
+            "k": {"type": "integer",
+                  "description": "How many candidates to propose (default 10)."},
+            "model": _MODEL_P,
+            "url": _URL_P,
+        },
+        "handler": lambda root, p: search(
+            root, p["query"], k=p.get("k", 10), model=p.get("model"),
+            url=p.get("url") or DEFAULT_URL),
+    },
+    "retrieve": {
+        "description": "Unified retrieval — the DEFAULT way to find things: "
+                       "unions semantic candidates (meaning) with `find` hits "
+                       "(literal), deduped, so you never miss a synonym OR an "
+                       "exact token. It ALWAYS answers and never errors on a down "
+                       "backend: the fallback to the AI-free `find` floor is "
+                       "MECHANICAL (inside the call), so it can't be forgotten. "
+                       "Transparent about it — the result's `via`/`backend` say "
+                       "whether semantics ran or it degraded to find (Ollama down "
+                       "/ no index). Still proposes only (ADR-0027 §2); read the "
+                       "sources to ground. Prefer this over "
+                       "`odin_search`/`odin_find` unless you specifically want "
+                       "just one.",
+        "params": {
+            "root": _ROOT_P,
+            "query": {"type": "string", "required": True,
+                      "description": "A natural-language or literal query — both "
+                                     "retrievers run."},
+            "k": {"type": "integer",
+                  "description": "Semantic candidates to union in (default 10); "
+                                 "find hits are added whole."},
+            "model": _MODEL_P,
+            "url": _URL_P,
+        },
+        "handler": lambda root, p: retrieve(
+            root, p["query"], k=p.get("k", 10), model=p.get("model"),
+            url=p.get("url") or DEFAULT_URL),
+    },
+    "refresh": {
+        "description": "Best-effort **warm** of the disposable semantic index "
+                       "(T-091): embed any doc changed since the last embed, "
+                       "prune the gone ones. Call it at the END of an `ingest` so "
+                       "what you just added is searchable *now* — the next "
+                       "`odin_retrieve` is instant instead of paying a cold-load. "
+                       "WRITE-ONLY and NEVER errors: no backend → a clean no-op "
+                       "with a status, so no try/except needed (unlike "
+                       "`odin_reindex`, which raises). It is a pure optimization "
+                       "— safe to skip, because `odin_retrieve` self-heals "
+                       "(T-090); this only moves the embed cost off the first "
+                       "query. Returns {status: clean|current|stale, embedded, "
+                       "pruned, warning}. Relay `warning` if present.",
+        "params": {
+            "root": _ROOT_P,
+            "model": {"type": "string",
+                      "description": "Embedding model (default nomic-embed-text / "
+                                     "the index's own)."},
+            "url": _URL_P,
+        },
+        "handler": lambda root, p: refresh(
+            root, model=p.get("model"), url=p.get("url") or DEFAULT_URL),
+    },
+}
 
 
 # --------------------------------------------------------------------------- #
