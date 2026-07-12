@@ -41,6 +41,42 @@ same deterministic Core MCP server:
   transport that owns every write and guarantees the invariants ("the Muninn
   lints clean" is the definition of done).
 
+## Why Odin?
+
+Honestly: Odin is not the only tool in this space, and it doesn't pretend to
+be. It descends — by name, in its own spec — from the **LLM-wiki pattern**
+(Karpathy's idea of an AI incrementally maintaining a wiki of grounded
+summaries), which already has fine implementations like
+[obsidian-wiki](https://github.com/ar9av/obsidian-wiki). Nearby live
+[Basic Memory](https://github.com/basicmachines-co/basic-memory) (durable
+AI Markdown memory), [NotebookLM](https://notebooklm.google/) (best-in-class
+cited answers over your sources), and the great Markdown-vault tools
+(Obsidian, Logseq) this whole family grew out of. Use whichever suits you —
+several are genuinely good.
+
+What Odin adds is **enforcement**. In every neighbor, the honesty of the
+knowledge depends on the model behaving. In Odin it is structural:
+
+- **No summary chaining.** A derived doc may ground *only* in sources, never
+  in another summary — not a convention, a **lint error** (a game of telephone
+  that cannot start).
+- **Provenance that expires on its own.** Every derived doc carries the
+  content hash of the exact source bytes it was written from; if a source
+  changes, everything resting on the old version is **flagged stale
+  automatically** — never silently "repaired."
+- **A deterministic Core owns every write.** The AI supplies content as data;
+  code enforces the invariants. The rules cannot be talked out of, prompted
+  around, or hallucinated away.
+- **Exploration is separated from commitment.** Huginn ranges out and reports
+  transiently; nothing enters your base except through a consented ingest that
+  re-reads the real source.
+
+If you need knowledge that is **auditable, durable, and yours** — readable and
+verifiable years from now with no AI and no vendor — that discipline is the
+difference. If you don't, the lighter tools above may serve you well.
+
+And no other tool has a raven.
+
 ## Prerequisite — `uv`
 
 The bundled server launches via `uv run --script`, so the one prerequisite is
