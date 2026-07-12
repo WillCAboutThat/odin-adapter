@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
-  "name": "odin-claude",
+  "name": "odin-adapter",
   "description": "Distribution channel for the Odin / Muninn knowledge-base plugin (Claude Code).",
   "owner": { "name": "Will Carlson" },
   "plugins": [

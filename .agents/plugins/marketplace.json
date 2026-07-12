@@ -1,0 +1,11 @@
+{
+  "name": "odin-adapter",
+  "interface": { "displayName": "Odin / Muninn" },
+  "plugins": [
+    {
+      "name": "odin",
+      "source": { "source": "local", "path": "./odin" },
+      "category": "Developer Tools"
+    }
+  ]
+}

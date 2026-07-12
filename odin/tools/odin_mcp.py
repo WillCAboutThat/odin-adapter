@@ -89,8 +89,11 @@ TOOLS = [
                        "`body` for a text source, OR `source_file` for original "
                        "bytes (PDF/image/…; a text aid is extracted per ADR-0010). "
                        "Byte-identical content dedups; changed bytes of an existing "
-                       "id make a new version. Sources are authoritative and never "
-                       "chained from.",
+                       "id make a new version. Changed bytes under a NEW id whose "
+                       "origin_ref already belongs to a captured source are refused "
+                       "(a silent lineage split, T-045) — capture under the matching "
+                       "id to version it, or set force_new to declare the split. "
+                       "Sources are authoritative and never chained from.",
         "inputSchema": _obj({
             "root": _ROOT,
             "id": {"type": "string", "description": "Stable source id (e.g. src-…)."},
@@ -102,6 +105,7 @@ TOOLS = [
             "tier": {"type": "string", "enum": ["full", "reference"], "default": "full"},
             "reason": {"type": "string", "description": "Required for a reference-tier capture (ADR-0003)."},
             "recoverable": {"type": "boolean", "description": "Is the original re-fetchable via origin.ref? (self-heal, T-066)."},
+            "force_new": {"type": "boolean", "description": "Deliberately start a NEW lineage although origin_ref matches an existing source (the split is logged; T-045)."},
         }, required=["root", "id", "origin_system", "origin_ref"]),
     },
     {
@@ -428,12 +432,14 @@ def _capture(root, p):
         return core.capture_file(root, p["id"], src.read_bytes(),
                                  p.get("filename") or src.name, origin=origin,
                                  tier=p.get("tier", "full"),
-                                 capture_reason=p.get("reason"), when=when)
+                                 capture_reason=p.get("reason"), when=when,
+                                 force_new=bool(p.get("force_new")))
     if p.get("body") is None:
         raise ValueError("capture needs `body` (text source) or `source_file` (bytes)")
     return core.capture(root, p["id"], p["body"], origin=origin,
                         tier=p.get("tier", "full"),
-                        capture_reason=p.get("reason"), when=when)
+                        capture_reason=p.get("reason"), when=when,
+                        force_new=bool(p.get("force_new")))
 
 
 def _lint(root):

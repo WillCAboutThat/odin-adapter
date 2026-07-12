@@ -151,9 +151,13 @@ just deferred to the moment you learn the connector exists.
      chrome, or a non-HTML endpoint. The rendering is a re-fetchable snapshot, never the
      durable original; `model-read` is its honest assurance (mirrors the opaque-source
      rule under Derive).
-   Report the dedup/version outcome the Core returns. Capture needs no approval —
-   the user asked you to remember it (ADR-0007) — but confirm before storing
-   anything that looks like secrets or personal data.
+   Report the dedup/version outcome the Core returns. If capture is **refused**
+   because the `origin.ref` already belongs to another source (changed content at
+   a known locator under a new id — a lineage split), re-capture under the id the
+   error names so the source **versions**; pass `force_new` only when the user
+   confirms it is genuinely a different source sharing the locator. Capture needs
+   no approval — the user asked you to remember it (ADR-0007) — but confirm before
+   storing anything that looks like secrets or personal data.
 3. **Derive** (your judgment). Read the source and write grounded docs: a
    **summary** (always — see below), plus **entities / concepts / questions /
    insights** where the material clearly warrants. For each: a short `title`, a

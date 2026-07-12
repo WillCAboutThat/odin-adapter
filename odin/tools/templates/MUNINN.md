@@ -19,10 +19,15 @@ assistant, reading it makes you **Odin** — a disciplined interface to this
 memory — rather than a generic chatbot. It is tool-neutral; a specific tool may
 bridge its own convention to this file, but this is the source of truth.
 
-- **Format version:** {{FORMAT_VERSION}} (see `muninn.yml`)
+- **Format version:** {{FORMAT_VERSION}} (see `muninn.yml`) — frozen at 1.0;
+  the format only evolves additively, so this base stays valid as tools move on.
 - **Created:** {{CREATED}}
 - **Full format spec:** the Muninn format specification (SPEC). This file is the
-  operating summary; the SPEC is the authority.
+  operating summary; the SPEC is the authority. It ships with every ODIN
+  distribution — in an installed plugin bundle at `docs/muninn/SPEC.md`, beside
+  the machine-readable JSON Schemas in `contracts/` — and is published at
+  <https://github.com/WillCAboutThat/odin-adapter>. Any JSON Schema validator
+  can check this base's documents against those schemas; no ODIN required.
 
 ## The one idea that matters: sources vs. derived
 

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Muninn source metadata (sources/<id>/meta.yml)",
+  "description": "The frontmatter contract of an immutable captured source (SPEC §5.1, format 1.0). Sources are captured once and never edited in place (I1); changed content makes a new version recorded in the history ledger (§4.3). Unknown fields are permitted — forward compatibility is part of the format (§5). What this schema cannot check — hash correctness against bytes on disk (L5), ledger ↔ disk coverage (L13), every-source-has-a-summary (L15) — is enforced by the linter.",
+  "type": "object",
+  "required": ["id", "type", "origin", "capture", "captured_at", "content_hash", "version", "history"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable for the life of the source; referenced by provenance and links (§4.1). Recommended form: src-<slug>."
+    },
+    "type": { "const": "source" },
+    "origin": {
+      "type": "object",
+      "required": ["system"],
+      "description": "Where this record came from (§5.1).",
+      "properties": {
+        "system": { "type": "string", "description": "e.g. file, url, chat, repo, jira, api, …" },
+        "ref": { "type": "string", "description": "Canonical locator within the system. Also the deterministic identity signal of the T-045 locator rung — give each distinct evolving source a distinct ref." },
+        "captured_by": { "type": "string", "description": "<faculty>/<tool>@<version> (ADR-0001)." },
+        "recoverable": { "type": "boolean", "description": "True when the original bytes can be re-fetched via ref (ADR-0010); false for e.g. chat (ADR-0003)." }
+      }
+    },
+    "capture": { "enum": ["full", "reference"], "description": "Capture tier (ADR-0003)." },
+    "capture_reason": {
+      "type": ["string", "null"],
+      "description": "Why the source is held as a reference, not in full — required iff capture: reference."
+    },
+    "captured_at": { "type": "string", "format": "date-time", "description": "ISO 8601, UTC." },
+    "content_hash": { "$ref": "#/$defs/contentHash" },
+    "version": { "type": "integer", "minimum": 1, "description": "Current version number (I1)." },
+    "history": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The version ledger (§4.3) — one entry per version, prior bytes retained on disk, never overwritten.",
+      "items": {
+        "type": "object",
+        "required": ["version", "content_hash", "captured_at", "file"],
+        "properties": {
+          "version": { "type": "integer", "minimum": 1 },
+          "content_hash": { "$ref": "#/$defs/contentHash" },
+          "captured_at": { "type": "string", "format": "date-time" },
+          "file": { "type": "string", "description": "Canonical bytes: source.<ext> for the current version, source.v<N>.<ext> for prior." },
+          "text_aid": { "type": ["string", "null"], "description": "The non-authoritative extracted-text aid for this version, if any (ADR-0010)." },
+          "extracted_by": { "type": ["string", "null"], "description": "Which extractor produced the aid (present iff text_aid)." },
+          "supersedes": { "type": ["integer", "null"], "description": "Version number this replaced, or null for v1." }
+        }
+      }
+    },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  },
+  "if": { "properties": { "capture": { "const": "reference" } }, "required": ["capture"] },
+  "then": { "required": ["capture_reason"], "properties": { "capture_reason": { "type": "string", "minLength": 1 } } },
+  "$defs": {
+    "contentHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "SHA-256 over the canonical captured content (§4.2): raw bytes for a binary source; the LF-normalized, frontmatter-stripped body for a text source."
+    }
+  }
+}

@@ -32,7 +32,7 @@ from muninn_lint import (  # noqa: E402  (shared model + hashing)
     source_text,
 )
 
-FORMAT_VERSION = "0.6"
+FORMAT_VERSION = "1.0"  # frozen — additive-only evolution from here (ADR-0037)
 
 
 def _now() -> str:
@@ -182,7 +182,7 @@ def usage_log(root, op, *, scope=None, bytes_in=None, bytes_out=0, tokens=None,
 
 
 def capture(root, id, body, *, origin, tier="full", capture_reason=None,
-            when="2026-07-03T00:00:00Z"):
+            when="2026-07-03T00:00:00Z", force_new=False):
     """Capture a **text** source (backward-compatible entry point).
 
     A text source's canonical bytes are the UTF-8 of `body`; the canonical file is
@@ -193,12 +193,12 @@ def capture(root, id, body, *, origin, tier="full", capture_reason=None,
         raise ValueError("body must be a string")
     return _capture(root, id, raw=body.encode("utf-8"), canonical_name="source.md",
                     origin=origin, tier=tier, capture_reason=capture_reason,
-                    when=when, text=None, extracted_by=None)
+                    when=when, text=None, extracted_by=None, force_new=force_new)
 
 
 def capture_file(root, id, raw, filename, *, origin, tier="full",
                  capture_reason=None, when="2026-07-03T00:00:00Z",
-                 text=None, extracted_by=None):
+                 text=None, extracted_by=None, force_new=False):
     """Capture a source from its **original bytes** (ADR-0010).
 
     The canonical source of record is `raw`, stored as `source<ext>` where `<ext>`
@@ -228,14 +228,15 @@ def capture_file(root, id, raw, filename, *, origin, tier="full",
     origin.setdefault("recoverable", True)
     return _capture(root, id, raw=raw, canonical_name=canonical_name,
                     origin=origin, tier=tier, capture_reason=capture_reason,
-                    when=when, text=text, extracted_by=extracted_by)
+                    when=when, text=text, extracted_by=extracted_by,
+                    force_new=force_new)
 
 
 def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
-             when, text, extracted_by):
+             when, text, extracted_by, force_new=False):
     """Shared capture engine — hash-first dedup, immutable write, versioning.
 
-    Contract (validated by tests/test_core_capture*.py):
+    Contract (validated by tests/test_core_capture*.py, test_capture_lineage.py):
       - NEW content  -> writes sources/<id>/{source<ext>, [source-text.md], meta.yml},
                         v1 ledger, content_hash over the canonical BYTES; returns
                         action="created".
@@ -244,6 +245,12 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
                         source.v<N><ext> (and its aid as source-text.v<N>.md), the
                         current names hold the new version, ledger + hash advanced;
                         action="versioned".
+      - CHANGED bytes under a NEW id whose origin.ref matches an existing source
+                        -> refused (a silent lineage SPLIT; the T-045 locator rung):
+                        the caller either captures under the matching id (versioning
+                        it) or passes force_new=True to declare a deliberate split,
+                        which is recorded in log.md and returned as
+                        "lineage_split_from". No silent merges or splits.
       - Always appends to log.md; never creates or edits a derived document.
       - Atomic: invalid input raises ValueError before any write; a new source is
         assembled in a temp dir and renamed into place.
@@ -267,6 +274,8 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
     sources = root / "sources"
 
     # --- hash-first dedup across ALL existing sources (by canonical bytes) --- #
+    ref = (origin or {}).get("ref")
+    ref_match = None  # first existing source sharing this origin.ref (locator rung)
     if sources.is_dir():
         for child in sorted(sources.iterdir()):
             meta_p = child / "meta.yml"
@@ -280,8 +289,26 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
                 return {"id": ex_id, "action": "deduped",
                         "version": existing.get("version", 1), "path": str(child),
                         "content_hash": h, "canonical": None}
+            ex_id = existing.get("id", child.name)
+            if (ref_match is None and ref and ex_id != id
+                    and (existing.get("origin") or {}).get("ref") == ref):
+                ref_match = ex_id
 
     sdir = sources / id
+
+    # --- locator rung (T-045): changed content at a KNOWN origin.ref under a
+    # NEW id would silently split that source's lineage — versioning stops,
+    # staleness stops propagating. Refuse (before any write) unless the caller
+    # declares the split; a declared split is logged, never silent.
+    if ref_match and not sdir.exists():
+        if not force_new:
+            raise ValueError(
+                f"origin.ref '{ref}' is already captured as source '{ref_match}' — "
+                f"capturing changed content under new id '{id}' would silently split "
+                f"its lineage (T-045). Capture under '{ref_match}' to version it, or "
+                f"pass force_new (--force-new) to deliberately start a new lineage.")
+    else:
+        ref_match = None  # same-id versioning / fresh locator: rung does not apply
 
     # --- changed bytes of an existing id -> new version --------------------- #
     if sdir.exists():
@@ -356,9 +383,13 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
     meta["history"] = [entry]
     (tmp / "meta.yml").write_text(_dump_yaml(meta), encoding="utf-8")
     tmp.rename(sdir)  # single atomic move into place
-    _append_log(root, when, f"capture | created | {id} ({tier})")
-    return {"id": id, "action": "created", "version": 1, "path": str(sdir),
-            "content_hash": h, "canonical": canonical_name}
+    note = f" | new-lineage split from {ref_match} (forced)" if ref_match else ""
+    _append_log(root, when, f"capture | created | {id} ({tier}){note}")
+    res = {"id": id, "action": "created", "version": 1, "path": str(sdir),
+           "content_hash": h, "canonical": canonical_name}
+    if ref_match:
+        res["lineage_split_from"] = ref_match
+    return res
 
 
 def capture_repo(root, id, repo_path, *, origin_ref=None, head=None, when=None,
@@ -402,9 +433,13 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
         bytes with the SAME rule `capture`/`lint` use (so text/CRLF agree), then:
           * hash matches any existing source        -> ``already-captured``
           * else `id` given and ``sources/<id>`` exists -> ``changed`` (would version)
+          * else `origin_ref` given and matches an existing source's ``origin.ref``
+            -> ``changed`` (method ``origin.ref``) — the same locator rung `capture`
+            enforces (T-045): changed bytes at a known locator are that source's
+            next version, not a new source
           * else                                    -> ``new``
-        `id` is optional; with no target lineage to compare against, a hash-miss is
-        honestly ``new`` (``changed`` needs the intended id).
+        `id` is optional; with no target lineage and no locator match, a hash-miss
+        is honestly ``new``.
 
       - **origin.ref** (`origin_ref`, no bytes): for a reference-tier candidate we
         can't hold/hash. A source whose ``origin.ref`` matches -> ``already-captured``
@@ -464,6 +499,12 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
     if id is not None and (sources / id).is_dir():
         return {"status": "changed", "method": "content-hash",
                 "match_id": id, "content_hash": h}
+
+    if origin_ref:
+        for child, meta in _metas():
+            if (meta.get("origin") or {}).get("ref") == origin_ref:
+                return {"status": "changed", "method": "origin.ref",
+                        "match_id": meta.get("id", child.name), "content_hash": h}
 
     return {"status": "new", "method": "content-hash",
             "match_id": None, "content_hash": h}
@@ -1697,6 +1738,10 @@ def main(argv=None):
                          "(sets origin.recoverable; needed for the regenerate self-heal "
                          "re-fetch on a URL/connector source, T-066). Text-path default "
                          "is unset; --source-file still defaults True.")
+    pc.add_argument("--force-new", action="store_true",
+                    help="deliberately start a NEW lineage even though this origin.ref "
+                         "already belongs to a captured source (otherwise capture refuses "
+                         "the silent split; T-045 locator rung). The split is logged.")
 
     pdd = sub.add_parser("dedup-check",
                          help="dry-run dedup: report already-captured/changed/new for a "
@@ -1892,14 +1937,16 @@ def main(argv=None):
             raw = src.read_bytes()
             res = capture_file(args.root, args.id, raw, args.filename or src.name,
                                origin=origin, tier=args.tier,
-                               capture_reason=args.reason, when=_now())
+                               capture_reason=args.reason, when=_now(),
+                               force_new=args.force_new)
             log_usage(args.root, "capture", bytes_out=len(raw),
                       id=args.id, action=res.get("action"))
             print(res)
         else:
             body = _read_body(args)
             res = capture(args.root, args.id, body, origin=origin,
-                          tier=args.tier, capture_reason=args.reason, when=_now())
+                          tier=args.tier, capture_reason=args.reason, when=_now(),
+                          force_new=args.force_new)
             log_usage(args.root, "capture", bytes_out=len(body.encode("utf-8")),
                       id=args.id, action=res.get("action"))
             print(res)
