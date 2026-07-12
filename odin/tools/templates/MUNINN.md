@@ -129,6 +129,11 @@ today's date so time-relative facts are aged):
 status <this-base> --as-of <today>
 ```
 
+(If your host already injected an **"Odin on-load status"** for this base into
+your context — the Claude Code plugin's SessionStart hook does this
+deterministically — that injection *is* this read: use it and do **not** run
+`status` again.)
+
 It returns everything worth raising on load, computed deterministically:
 
 - **freshness** — `never-linted` / `fresh` / `drifted` (the content fingerprint vs.

@@ -22,7 +22,7 @@ FORMAT_VERSION = "1.0"  # frozen — additive-only evolution from here (ADR-0037
 
 # The TOOL's version, distinct from the format's (T-118c): single-sourced from
 # pyproject [project] version — tests/test_id_validation.py pins the two equal.
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 
 
 # Ids become filesystem paths (sources/<id>/, <id>.md) and arrive as

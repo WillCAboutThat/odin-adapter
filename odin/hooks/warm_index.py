@@ -11,15 +11,16 @@ at session start, so the user's first `retrieve`/`search` doesn't pay the ~27s c
 `retrieve` self-heals regardless (T-090), so this only ever *removes latency*, never a
 correctness step.
 
-KNOWN LIMITATION (2026-07-11, T-020 research): `${CLAUDE_PLUGIN_ROOT}` is **not
-expanded inside SessionStart hooks** on current Claude Code (an open upstream bug —
-anthropics/claude-code #27145 / #39550 / #43380), so `hooks.json`'s launch command
-`uv run --script "${CLAUDE_PLUGIN_ROOT}/hooks/warm_index.py"` resolves to an empty
-prefix and this hook is **silently inert on marketplace installs** until that bug is
-patched. Impact is only the cold-load latency above (a comfort optimization, never
-correctness — retrieve self-heals). No in-repo workaround exists: a SessionStart hook
-has no reliable way to locate its own bundled script. Re-enables automatically when
-upstream fixes the variable; tracked with the (also-blocked) freshness hook, T-020.
+LIVE ON CURRENT CLAUDE CODE (verified 2026-07-12, T-020): `${CLAUDE_PLUGIN_ROOT}`
+now expands inside SessionStart hooks — the upstream bugs (anthropics/claude-code
+#27145 / #39550 / #43380) were fixed Feb–Apr 2026, and this hook was verified
+end-to-end on a real marketplace install (Claude Code 2.1.207): fresh session in a
+Muninn → hook fired → gate read the sidecar's model → detached child sent the warm.
+On OLDER Claude Code the launch command resolves to an empty prefix and the hook is
+silently inert there; impact is only the cold-load latency above (a comfort
+optimization, never correctness — retrieve self-heals). Note: when two marketplace
+copies of the plugin are installed, Claude Code dedupes the identical hook command,
+so the warm fires once.
 
 Three properties make it safe to ship to every plugin user:
 
