@@ -9,6 +9,7 @@ its output must always leave the Muninn conformant (the linter is the check).
 follow.
 """
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -721,7 +722,8 @@ def stamp_derived(root):
 
 def write_derived(root, id, *, body, sources, type="summary", title,
                   abstract=None, status="current", see_also=None,
-                  derivation=None, derived_at="2026-07-03T00:10:00Z", connectors=None):
+                  derivation=None, derived_at="2026-07-03T00:10:00Z", connectors=None,
+                  as_of=None):
     """Write a derived document with provenance — the write half of derivation.
 
     The adapter supplies judgment (title/abstract/body, and *which* sources);
@@ -755,6 +757,12 @@ def write_derived(root, id, *, body, sources, type="summary", title,
         fm["abstract"] = abstract
     fm["sources"] = prov
     fm["derived_at"] = derived_at
+    # A doc that states a TIME-RELATIVE result (ADR-0034 / T-104) declares the date
+    # its claim was true. It is surfaced/aged on-load by `status`, NOT by lint (which
+    # stays time-independent, ADR-0005). The authoring default is still to anchor on the
+    # immutable datum + derivation rule so no as_of is needed; this is the residual.
+    if as_of:
+        fm["as_of"] = as_of
     if see_also:
         fm["see_also"] = see_also
     # A landscape doc may ASSERT connectors it references but hasn't ingested from
@@ -785,6 +793,399 @@ def write_derived(root, id, *, body, sources, type="summary", title,
     _append_log(root, derived_at, f"derive | {type} | {id} <- {', '.join(sources)}")
     return {"id": id, "type": type, "path": str(target),
             "sources": [p["id"] for p in prov]}
+
+
+# --------------------------------------------------------------------------- #
+# candidates — staging for emergent augmentation (ADR-0033 / T-052)
+#
+# When a reasoning turn produces a grounded inference of durable value, it is NOT
+# written into the base as an `ask`/`synthesize` side effect (consent-of-surprise,
+# base bloat). It is STAGED in `candidates/` — the reasoning-time sibling of `inbox/`
+# (ADR-0006): non-durable, ignored by the invariants and the linter (which scans only
+# DERIVED_DIRS/projects/decisions/sources), nothing may ground in it. Admission is a
+# deliberate, BATCHED review (`promote_candidate`), never a per-item prompt. A decline
+# is remembered (a fingerprint-keyed tombstone in `candidates/declined/`) so the same
+# inference does not re-stage and re-nag — unless a cited source advances, which changes
+# the fingerprint and legitimately re-surfaces it (ADR-0019 evidence-advance logic).
+# --------------------------------------------------------------------------- #
+_CANDIDATES = "candidates"
+_DECLINED = "candidates/declined"
+_KIND_PREFIX = {"summary": "sum", "entity": "ent", "concept": "con",
+                "question": "q", "insight": "ins"}
+
+
+def _candidate_fingerprint(source_pairs, title, abstract, body) -> str:
+    """The identity of a staged inference, over BOTH its grounding and its claim:
+    the sorted `(source_id, content_hash)` pairs plus a content hash of the authored
+    claim (title/abstract/body). A cited source advancing (new hash) => new fingerprint
+    => the "same" inference over new bytes is a legitimately fresh candidate, not a
+    re-nag (ADR-0033 Decision 9). A reworded claim over the same sources is also new."""
+    claim_h = muninn_lint.derived_content_hash(title, abstract, body)
+    basis = "\n".join(f"{sid}:{h}" for sid, h in sorted(source_pairs)) + "\n" + claim_h
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+
+def _source_prov(root: Path, sources):
+    """[(id, current content_hash)] for real sources only — the grounding half of a
+    candidate, enforcing sources-only at the staging boundary too (I3, no chaining:
+    a candidate may cite only sources, never another derived doc or candidate)."""
+    pairs = []
+    for sid in sources:
+        meta_p = root / "sources" / sid / "meta.yml"
+        if not meta_p.exists():
+            raise ValueError(
+                f"grounding id {sid!r} is not a source — a candidate may cite only "
+                f"sources (I3, no chaining even pre-admission)")
+        pairs.append((sid, _load_yaml(meta_p).get("content_hash")))
+    return pairs
+
+
+def _fingerprints_in(d: Path) -> set:
+    """The set of candidate fingerprints already present in a directory (pending or
+    declined) — the cheap dedup lookup the stager runs before writing."""
+    seen = set()
+    if not d.is_dir():
+        return seen
+    for md in sorted(d.glob("cand-*.md")):
+        fp = _load_yaml_frontmatter(md).get("fingerprint")
+        if fp:
+            seen.add(fp)
+    return seen
+
+
+def _load_yaml_frontmatter(p: Path) -> dict:
+    """Parse just the leading `--- ... ---` YAML block of a Markdown doc."""
+    text = p.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}
+    return yaml.safe_load(text[3:end]) or {}
+
+
+def stage_candidate(root, id, *, body, sources, title, abstract=None,
+                    proposed_kind="insight", staged_at=None, derivation=None, as_of=None):
+    """Stage an emergent grounded inference into `candidates/` for later review.
+
+    Grounded and cited (sources + their current hashes, I2/I3) but NOT admitted to the
+    base. Deduped by fingerprint against BOTH the pending set and the declined
+    tombstones: a duplicate of a pending candidate is a no-op; a match of a declined one
+    is skipped (the sticky decline — no re-nag) unless a cited source advanced. Returns
+    `{action: staged|skipped, ...}`.
+    """
+    root = Path(root)
+    staged_at = staged_at or _now()
+    if not id.startswith("cand-"):
+        raise ValueError(f"candidate id must start with 'cand-' (got {id!r})")
+    if proposed_kind not in _TYPE_DIR:
+        raise ValueError(f"proposed_kind {proposed_kind!r} not a derived type")
+    pairs = _source_prov(root, sources)
+    if not pairs:
+        raise ValueError("a candidate needs at least one grounding source (I2)")
+    fp = _candidate_fingerprint(pairs, title, abstract, body)
+
+    cdir = root / _CANDIDATES
+    ddir = root / _DECLINED
+    if fp in _fingerprints_in(ddir):
+        return {"action": "skipped", "id": id, "reason": "declined",
+                "note": "matches a declined tombstone; not re-staged (grounding unchanged)"}
+    if fp in _fingerprints_in(cdir):
+        return {"action": "skipped", "id": id, "reason": "already-pending",
+                "note": "an equivalent candidate is already awaiting review"}
+
+    fm = {"id": id, "type": "candidate", "proposed_kind": proposed_kind, "title": title}
+    if abstract:
+        fm["abstract"] = abstract
+    fm["sources"] = [{"id": sid, "hash": h} for sid, h in pairs]
+    if derivation:
+        fm["derivation"] = derivation
+    # A candidate that states a TIME-RELATIVE result carries `as_of` (T-104/ADR-0034).
+    # It is aged on-load by `status` once promoted **as its own doc** — such a candidate
+    # must NOT be folded (a doc-level `as_of` can't describe one line of a multi-fact
+    # card); `promote --into` rejects it (T-109).
+    if as_of:
+        fm["as_of"] = as_of
+    fm["fingerprint"] = fp
+    fm["staged_at"] = staged_at
+    fm["status"] = "pending"
+    body_text = body if body.endswith("\n") else body + "\n"
+    doc_text = "---\n" + _dump_yaml(fm) + "---\n" + body_text
+
+    cdir.mkdir(parents=True, exist_ok=True)
+    target = cdir / f"{id}.md"
+    tmp = cdir / f".{id}.md.tmp"
+    tmp.write_text(doc_text, encoding="utf-8")
+    tmp.replace(target)
+    _append_log(root, staged_at, f"stage-candidate | {proposed_kind} | {id} <- "
+                                 f"{', '.join(sid for sid, _ in pairs)}")
+    return {"action": "staged", "id": id, "path": str(target),
+            "proposed_kind": proposed_kind, "fingerprint": fp}
+
+
+def list_candidates(root):
+    """Enumerate pending candidates + the declined count — the read the on-load
+    elicitation and `review-candidates` sweep both use (ADR-0033 Decision 7). Emitted as
+    one signal among possibly several (staleness, review-drift) so a future unified
+    session-boundary surface can fold it in (T-103)."""
+    root = Path(root)
+    cdir = root / _CANDIDATES
+    pending = []
+    if cdir.is_dir():
+        for md in sorted(cdir.glob("cand-*.md")):
+            fm = _load_yaml_frontmatter(md)
+            pending.append({"id": fm.get("id", md.stem),
+                            "proposed_kind": fm.get("proposed_kind"),
+                            "title": fm.get("title"),
+                            "sources": [s.get("id") for s in (fm.get("sources") or [])]})
+    declined = len(list((root / _DECLINED).glob("cand-*.md"))) if (root / _DECLINED).is_dir() else 0
+    return {"pending": pending, "pending_count": len(pending), "declined_count": declined}
+
+
+def decline_candidate(root, id, *, declined_at=None, reason=None):
+    """Decline a candidate: move it to `candidates/declined/` as a fingerprint-keyed
+    tombstone (never delete — a sticky decline is what stops the re-nag, and honors the
+    append-only *surface, never erase* discipline). Regenerates the declined index."""
+    root = Path(root)
+    declined_at = declined_at or _now()
+    src = root / _CANDIDATES / f"{id}.md"
+    if not src.exists():
+        raise ValueError(f"no pending candidate {id!r} to decline")
+    fm = _load_yaml_frontmatter(src)
+    fm["status"] = "declined"
+    fm["declined_at"] = declined_at
+    if reason:
+        fm["decline_reason"] = reason
+    body = src.read_text(encoding="utf-8").split("---\n", 2)[2]
+    doc_text = "---\n" + _dump_yaml(fm) + "---\n" + (body if body.endswith("\n") else body + "\n")
+    ddir = root / _DECLINED
+    ddir.mkdir(parents=True, exist_ok=True)
+    (ddir / f"{id}.md").write_text(doc_text, encoding="utf-8")
+    src.unlink()
+    _append_log(root, declined_at, f"decline-candidate | {id}")
+    regenerate_declined_index(root)
+    return {"action": "declined", "id": id, "path": str(ddir / f"{id}.md")}
+
+
+def _find_derived_doc(root: Path, doc_id: str):
+    """The path of a derived doc by id (summary/entity/concept/question/insight), or
+    None. Folds target only derived docs — never a source, decision, or project."""
+    for d in _TYPE_DIR.values():
+        p = root / d / f"{doc_id}.md"
+        if p.exists():
+            return p
+    return None
+
+
+def _fold_candidate_into(root, cand_id, target_id, when):
+    """Fold a candidate into an existing derived doc as a **literal insert** (ADR-0035):
+    append the candidate's already-authored block to the target's body, **byte-preserving
+    the existing content** (the Core moves authored content, it does not re-author —
+    ADR-0008). Union the candidate's *new* source(s) at their current hash while keeping
+    the target's existing provenance **exactly as recorded** — so a fold never silently
+    heals staleness (I5). Drop the doc to the **weakest** derivation rung, re-stamp the
+    self-hash, and consume the candidate. `regenerate` re-coalesces later."""
+    cand_path = root / _CANDIDATES / f"{cand_id}.md"
+    if not cand_path.exists():
+        raise ValueError(f"no pending candidate {cand_id!r} to fold")
+    target_path = _find_derived_doc(root, target_id)
+    if target_path is None:
+        raise ValueError(f"no derived doc {target_id!r} to fold into (must be an existing "
+                         f"summary/entity/concept/question/insight)")
+
+    cand_fm = _load_yaml_frontmatter(cand_path)
+    # A dated (time-relative) candidate must not be folded: `as_of` is a doc-level signal
+    # `status` ages the WHOLE doc by, but only this one line would be time-relative in a
+    # multi-fact card (T-109). Route it to its own doc instead (promote as new, with as_of).
+    if cand_fm.get("as_of"):
+        raise ValueError(
+            f"candidate {cand_id!r} carries as_of={cand_fm['as_of']!r} (a time-relative "
+            f"result); it can't be folded — a doc-level as_of can't describe one line of "
+            f"{target_id!r}. Promote it as its own doc (no --into), or re-anchor the "
+            f"candidate on the immutable datum + rule so it needs no as_of (T-104).")
+    cand_block = cand_path.read_text(encoding="utf-8").split("---\n", 2)[2].strip()
+    t_fm = _load_yaml_frontmatter(target_path)
+    t_body = target_path.read_text(encoding="utf-8").split("---\n", 2)[2]
+
+    # Union sources: keep the target's existing entries AS RECORDED (don't re-freshen —
+    # masking staleness would violate I5); add only the candidate's NEW sources, at their
+    # current hash.
+    merged = list(t_fm.get("sources") or [])
+    existing_ids = {s.get("id") for s in merged}
+    for s in (cand_fm.get("sources") or []):
+        sid = s.get("id")
+        if sid not in existing_ids:
+            meta = _load_yaml(root / "sources" / sid / "meta.yml")
+            merged.append({"id": sid, "hash": meta.get("content_hash")})
+    t_fm["sources"] = merged
+
+    new_body = t_body.rstrip("\n") + "\n\n" + cand_block + "\n"
+
+    rungs = [d for d in (t_fm.get("derivation"), cand_fm.get("derivation")) if d]
+    if rungs:
+        t_fm["derivation"] = muninn_lint.weakest_derivation(rungs)
+    t_fm["derived_at"] = when
+    t_fm["self_hash"] = muninn_lint.derived_content_hash(
+        t_fm.get("title"), t_fm.get("abstract"), new_body)
+
+    doc_text = "---\n" + _dump_yaml(t_fm) + "---\n" + (new_body if new_body.endswith("\n") else new_body + "\n")
+    tmp = target_path.parent / f".{target_id}.md.tmp"
+    tmp.write_text(doc_text, encoding="utf-8")
+    tmp.replace(target_path)
+    cand_path.unlink()
+    _append_log(root, when, f"fold-candidate | {cand_id} -> {target_id}")
+    return {"action": "folded", "candidate": cand_id, "into": target_id,
+            "type": t_fm.get("type"), "path": str(target_path),
+            "sources": [s["id"] for s in merged]}
+
+
+def promote_candidate(root, id, *, new_id=None, into=None, derived_at=None,
+                      derivation=None):
+    """Admit a pending candidate into the base.
+
+    Default — **promote as a new derived doc** (kind = the candidate's `proposed_kind`,
+    an insight): reuses `write_derived`, fully subject to lint/index/provenance; the
+    candidate is removed once admitted.
+
+    `into=<doc-id>` — **fold into an existing derived doc** as a literal insert
+    (ADR-0035): append the candidate's authored block, union its new sources, consume the
+    candidate. `regenerate` re-coalesces the doc later.
+    """
+    root = Path(root)
+    derived_at = derived_at or _now()
+    if into is not None:
+        return _fold_candidate_into(root, id, into, derived_at)
+    src = root / _CANDIDATES / f"{id}.md"
+    if not src.exists():
+        raise ValueError(f"no pending candidate {id!r} to promote")
+    fm = _load_yaml_frontmatter(src)
+    body = src.read_text(encoding="utf-8").split("---\n", 2)[2]
+    kind = fm.get("proposed_kind", "insight")
+    if new_id is None:
+        prefix = _KIND_PREFIX.get(kind, kind)
+        new_id = f"{prefix}-{id[len('cand-'):]}" if id.startswith("cand-") else id
+    sources = [s["id"] for s in (fm.get("sources") or [])]
+    res = write_derived(root, new_id, body=body, sources=sources, type=kind,
+                        title=fm.get("title"), abstract=fm.get("abstract"),
+                        derivation=derivation or fm.get("derivation"),
+                        as_of=fm.get("as_of"), derived_at=derived_at)
+    src.unlink()
+    _append_log(root, derived_at, f"promote-candidate | {id} -> {new_id} ({kind})")
+    return {"action": "promoted", "promoted_from": id, **res}
+
+
+def regenerate_declined_index(root):
+    """Project `candidates/declined/` into a regenerable `declined-index.md` — a cheap
+    comprehension + dedup view (ADR-0017 discipline), NOT authored state and NOT the base
+    `index.md`; the linter neither builds nor checks it. Losing it costs nothing."""
+    root = Path(root)
+    ddir = root / _DECLINED
+    if not ddir.is_dir():
+        return {"action": "noop", "reason": "no declined candidates"}
+    rows = []
+    for md in sorted(ddir.glob("cand-*.md")):
+        fm = _load_yaml_frontmatter(md)
+        rows.append((fm.get("id", md.stem), fm.get("title", ""),
+                     fm.get("declined_at", ""), fm.get("decline_reason", ""),
+                     fm.get("fingerprint", "")))
+    lines = ["# Declined candidates (regenerable view — ADR-0033; not base knowledge)", ""]
+    if not rows:
+        lines.append("_None._")
+    else:
+        lines.append("| id | title | declined_at | reason |")
+        lines.append("|----|-------|-------------|--------|")
+        for cid, title, when, reason, _fp in rows:
+            lines.append(f"| {cid} | {title} | {when} | {reason} |")
+    (ddir.parent / "declined-index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"action": "projected", "declined": len(rows)}
+
+
+# --------------------------------------------------------------------------- #
+# status — the deterministic on-load surface (ADR-0034 / T-103, T-104)
+#
+# One read-only op the adapter calls on load and renders as a SINGLE consolidated
+# nudge, instead of the freshness / new-source / candidate strands each prompting
+# separately. Pure function of (bytes, as_of): `as_of` (today) is an EXPLICIT arg —
+# never hidden wall-clock — so the op stays faithful and reproducible-given-inputs
+# (the Core boundary holds; time is injected, like `_now()`). Writes nothing.
+# --------------------------------------------------------------------------- #
+_AS_OF_WINDOW_DAYS = 30  # conservative default; tunable (ADR-0034 §5)
+
+
+def _days_old(as_of_str, today_str):
+    """Whole days from an `as_of` date to `today` (both ISO; date part only), or None
+    if either won't parse. Negative if as_of is in the future."""
+    try:
+        a = datetime.fromisoformat(str(as_of_str)[:10])
+        t = datetime.fromisoformat(str(today_str)[:10])
+    except (ValueError, TypeError):
+        return None
+    return (t - a).days
+
+
+def _captures_since_last_lint(root: Path) -> int:
+    """Count `capture` log entries after the most recent `lint` entry — a deterministic
+    'what's arrived since the last check' from the append-only log (ADR-0005 record)."""
+    logp = root / "log.md"
+    if not logp.exists():
+        return 0
+    entries = [s.strip() for s in logp.read_text(encoding="utf-8").splitlines()
+               if s.strip().startswith("## [") and "]" in s]
+
+    def _op(s):
+        return s.split("]", 1)[1].split("|", 1)[0].strip()
+
+    last_lint = max((i for i, s in enumerate(entries) if _op(s) == "lint"), default=-1)
+    return sum(1 for s in entries[last_lint + 1:] if _op(s) == "capture")
+
+
+def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
+    """The on-load status surface (ADR-0034). Read-only; composes the signals worth
+    raising on load into one summary the adapter renders as a single nudge:
+
+      - freshness  : never-linted | fresh | drifted (fingerprint vs last lint, ADR-0005)
+      - stale      : ids of derived docs whose cited source hash advanced (the L4 condition)
+      - pending_candidates : count awaiting review (ADR-0033)
+      - captures_since_lint: sources captured since the last lint (the synthesize nudge)
+      - aged       : {id, as_of, days_old} for `as_of` docs older than the window (T-104)
+
+    `aged` is empty unless `as_of` (today) is supplied — time only enters here, never lint.
+    """
+    root = Path(root)
+    linter = Linter(root)
+    linter.load()
+    linter.check()
+
+    current_fp = linter.content_fingerprint()
+    recorded_fp = muninn_lint.last_lint_fingerprint(root)
+    freshness = ("never-linted" if recorded_fp is None
+                 else "fresh" if recorded_fp == current_fp else "drifted")
+
+    id_by_path = {str(d.path): d.id for d in linter.docs}
+    stale = sorted({id_by_path.get(f.path, f.path) for f in linter.findings if f.rule == "L4"})
+
+    aged = []
+    if as_of:
+        for d in linter.docs:
+            if d.kind != "derived":
+                continue
+            av = d.data.get("as_of")
+            if not av:
+                continue
+            days = _days_old(av, as_of)
+            if days is not None and days > aging_window_days:
+                aged.append({"id": d.id, "as_of": str(av), "days_old": days})
+        aged.sort(key=lambda a: -a["days_old"])
+
+    return {
+        "freshness": freshness,
+        "fingerprint": current_fp,
+        "stale": stale,
+        "pending_candidates": list_candidates(root)["pending_count"],
+        "captures_since_lint": _captures_since_last_lint(root),
+        "aged": aged,
+        "as_of": as_of,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -1161,7 +1562,7 @@ def connector_projection(root):
 # init — scaffold a new Muninn (operational verb; deterministic, SPEC §3, §5.8)
 # --------------------------------------------------------------------------- #
 _LAYOUT = ("sources", "summaries", "entities", "concepts", "questions",
-           "insights", "projects", "decisions")
+           "insights", "projects", "decisions", "candidates", "candidates/declined")
 
 
 _TOOL_ROOT_SENTINEL = ".odin-tool-root"
@@ -1323,7 +1724,71 @@ def main(argv=None):
     pd.add_argument("--derivation", choices=sorted(muninn_lint.DERIVATION_VALUES))
     pd.add_argument("--connector", action="append", default=[], metavar="system[=ref]",
                     help="assert a connector this landscape doc references (repeatable; T-070)")
+    pd.add_argument("--as-of", dest="as_of",
+                    help="ISO date a TIME-RELATIVE claim was true — surfaced/aged on-load "
+                         "by `status`, never by lint (ADR-0034). Prefer anchoring on the "
+                         "immutable datum + rule instead; this is the residual.")
     pd.add_argument("--file")
+
+    # candidates — staging for emergent augmentation (ADR-0033 / T-052)
+    psc = sub.add_parser("stage-candidate",
+                         help="stage an emergent grounded inference for review (NOT admitted "
+                              "to the base; deduped vs pending + declined; ADR-0033)")
+    psc.add_argument("root")
+    psc.add_argument("id", help="candidate id (must start 'cand-')")
+    psc.add_argument("--title", required=True)
+    psc.add_argument("--abstract")
+    psc.add_argument("--source", action="append", required=True, dest="sources")
+    psc.add_argument("--proposed-kind", default="insight",
+                     choices=sorted(_TYPE_DIR), dest="proposed_kind",
+                     help="what it becomes on promote (default insight)")
+    psc.add_argument("--derivation", default=None,
+                     choices=sorted(muninn_lint.DERIVATION_VALUES),
+                     help="the honest rung (set it, don't presume): a single-source "
+                          "deterministic computation like an age is `extracted`, not "
+                          "`synthesis` (which is cross-source generative); left unset, "
+                          "the reviewer sets it at promotion (T-107 / ADR-0011)")
+    psc.add_argument("--as-of", dest="as_of",
+                     help="ISO date IF this candidate states a TIME-RELATIVE result — it "
+                          "is aged on-load once promoted as its own doc, and can't be "
+                          "folded (T-109). Prefer anchoring on the datum + rule (no as_of).")
+    psc.add_argument("--file")
+
+    plc = sub.add_parser("list-candidates",
+                         help="list pending candidates + declined count (the on-load / "
+                              "review-candidates read; ADR-0033)")
+    plc.add_argument("root")
+    plc.add_argument("--json", action="store_true", dest="as_json",
+                     help="emit the structured result as JSON (machine-readable)")
+
+    ppc = sub.add_parser("promote-candidate",
+                         help="admit a pending candidate into the base as a derived doc "
+                              "(reuses write_derived; ADR-0033)")
+    ppc.add_argument("root")
+    ppc.add_argument("id", help="the cand-… id to promote")
+    ppc.add_argument("--new-id", dest="new_id",
+                     help="target derived id (default: swap cand- for the kind prefix)")
+    ppc.add_argument("--into", dest="into",
+                     help="fold into an existing derived doc (literal insert; ADR-0035) "
+                          "instead of writing a new one — e.g. --into ent-strudel")
+    ppc.add_argument("--derivation", choices=sorted(muninn_lint.DERIVATION_VALUES))
+
+    pdc = sub.add_parser("decline-candidate",
+                         help="decline a pending candidate — a fingerprint-keyed tombstone in "
+                              "candidates/declined/ (never deleted; ADR-0033)")
+    pdc.add_argument("root")
+    pdc.add_argument("id")
+    pdc.add_argument("--reason")
+
+    pstat = sub.add_parser("status",
+                           help="on-load status surface: freshness · stale · pending "
+                                "candidates · captures-since-lint · aged time-relative "
+                                "facts — one read for a single nudge (ADR-0034)")
+    pstat.add_argument("root")
+    pstat.add_argument("--as-of", dest="as_of",
+                       help="today's date (ISO) — enables date-aging of `as_of` docs")
+    pstat.add_argument("--json", action="store_true", dest="as_json",
+                       help="emit the structured result as JSON (machine-readable)")
 
     for name in ("index", "fingerprint", "lint"):
         sp = sub.add_parser(name, help=f"{name} the Muninn")
@@ -1379,6 +1844,8 @@ def main(argv=None):
     pfind.add_argument("query", nargs="*", help="query terms (omit to list all of --type)")
     pfind.add_argument("--type", dest="type",
                        help="restrict to a doc type, e.g. 'decision' (the `why` verb)")
+    pfind.add_argument("--json", action="store_true", dest="as_json",
+                       help="emit the structured matches as JSON (machine-readable)")
 
     pp = sub.add_parser("project", help="create/update a project page (a curated view; ADR-0002/0017)")
     pp.add_argument("root")
@@ -1395,6 +1862,8 @@ def main(argv=None):
                                         "(a project ∪ every global view; SPEC §5.6)")
     pr.add_argument("root")
     pr.add_argument("project", nargs="?", help="a project id; omit for the whole base")
+    pr.add_argument("--json", action="store_true", dest="as_json",
+                    help="emit the structured result as JSON (machine-readable)")
 
     pdec = sub.add_parser("record-decision",
                           help="record the owner's decision — AUTHORED, not derived "
@@ -1448,11 +1917,41 @@ def main(argv=None):
         res = write_derived(args.root, args.id, body=body, sources=args.sources,
                             type=args.type, title=args.title, abstract=args.abstract,
                             derivation=args.derivation, derived_at=_now(),
-                            connectors=connectors or None)
+                            connectors=connectors or None, as_of=args.as_of)
         log_usage(args.root, "derive",
                   bytes_in=sum(_source_bytes(args.root, s) for s in args.sources),
                   bytes_out=len(body.encode("utf-8")), id=args.id, type=args.type)
         print(res)
+    elif args.cmd == "stage-candidate":
+        print(stage_candidate(args.root, args.id, body=_read_body(args),
+                              sources=args.sources, title=args.title,
+                              abstract=args.abstract, proposed_kind=args.proposed_kind,
+                              derivation=args.derivation, as_of=args.as_of, staged_at=_now()))
+    elif args.cmd == "list-candidates":
+        rep = list_candidates(args.root)
+        if args.as_json:
+            print(json.dumps(rep))
+        else:
+            for c in rep["pending"]:
+                print(f"{c['id']}  ({c['proposed_kind']})  {c['title']}")
+            print(f"({rep['pending_count']} pending, {rep['declined_count']} declined)")
+    elif args.cmd == "promote-candidate":
+        print(promote_candidate(args.root, args.id, new_id=args.new_id, into=args.into,
+                                derivation=args.derivation, derived_at=_now()))
+    elif args.cmd == "decline-candidate":
+        print(decline_candidate(args.root, args.id, reason=args.reason, declined_at=_now()))
+    elif args.cmd == "status":
+        rep = status(args.root, as_of=args.as_of)
+        if args.as_json:
+            print(json.dumps(rep))
+        else:
+            print(f"freshness: {rep['freshness']}  ·  {rep['pending_candidates']} candidate(s) "
+                  f"·  {len(rep['stale'])} stale  ·  {rep['captures_since_lint']} capture(s) "
+                  f"since lint  ·  {len(rep['aged'])} aging")
+            for a in rep["aged"]:
+                print(f"  aging: {a['id']}  (as_of {a['as_of']}, {a['days_old']}d old)")
+            for sid in rep["stale"]:
+                print(f"  stale: {sid}")
     elif args.cmd == "project":
         print(write_project(args.root, args.id, title=args.title,
                             add_members=args.add_members, scope=args.scope,
@@ -1495,18 +1994,24 @@ def main(argv=None):
         print(fingerprint(args.root))
     elif args.cmd == "find":
         hits = find(args.root, " ".join(args.query), type=args.type)
-        for r in hits:
-            print(f"{r['kind']:8} {r['id']}  —  {r['title']}")
-        scope = f" of type '{args.type}'" if args.type else ""
-        print(f"({len(hits)} match(es){scope})")
+        if args.as_json:
+            print(json.dumps({"matches": hits, "count": len(hits)}))
+        else:
+            for r in hits:
+                print(f"{r['kind']:8} {r['id']}  —  {r['title']}")
+            scope = f" of type '{args.type}'" if args.type else ""
+            print(f"({len(hits)} match(es){scope})")
     elif args.cmd == "resolve":
         r = resolve_scope(args.root, args.project)
-        for mid in r["members"]:
-            print(mid)
-        scope_label = r["scope"] if r["scope"] else "(whole base)"
-        gv = ", ".join(r["global_views"]) or "(none)"
-        print(f"({len(r['members'])} member(s); scope {scope_label}; "
-              f"global views unioned: {gv})")
+        if args.as_json:
+            print(json.dumps(r))
+        else:
+            for mid in r["members"]:
+                print(mid)
+            scope_label = r["scope"] if r["scope"] else "(whole base)"
+            gv = ", ".join(r["global_views"]) or "(none)"
+            print(f"({len(r['members'])} member(s); scope {scope_label}; "
+                  f"global views unioned: {gv})")
     elif args.cmd == "lint":
         return muninn_lint.Linter(Path(args.root)).run()
     return 0

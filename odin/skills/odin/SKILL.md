@@ -211,9 +211,15 @@ just deferred to the moment you learn the connector exists.
    (`… project <root> global --member …`), which every scope already unions in
    (ADR-0018).
 6. **Verify:** `… lint <root>` — it **must** report 0 errors. If not, fix and
-   re-lint. "The Muninn lints clean" is the definition of done. A common finding is
-   **L15** (a source with no summary) — heal it per **Regenerate**, don't ship past
-   it.
+   re-lint. "The Muninn lints clean" is the definition of done **for an ingest**. A
+   common finding is **L15** (a source with no summary) — heal it per **Regenerate**,
+   don't ship past it.
+   - **Scoped write onto an already-dirty base is different.** When you `derive` /
+     `regenerate` / `fold` **one** doc into a base that already carried *unrelated*
+     lint errors, you are done when **your own** output lints clean; **surface** the
+     pre-existing errors for the user's consented healing — do **not** silently fix
+     them (that is unconsented repair — *surface, never silently repair*, §I5). Fix
+     what your write caused; flag the rest.
 7. **Warm the semantic index (optional, best-effort — T-091).** After a clean lint,
    fire `odin_refresh` (or `muninn_semantic.py refresh <root>`) so the docs you just
    added are embedded **now** — while the user is already here — and the next
@@ -343,6 +349,15 @@ and brittle (a query's words must appear literally; it false-positives on stray 
 `retrieve` adds the semantic hit and still degrades to `find` for free, so it's the safe
 default everywhere.
 
+**Availability — retrieve/search need the semantic tier; the bare CLI is `find`-only.**
+`retrieve`/`search` live in the **semantic tier**: the MCP tools `odin_retrieve` /
+`odin_search` (a plugin install ships them), or `muninn_semantic.py`. The **bare Core
+CLI** (`muninn_core.py`) exposes **only `find`** — the AI-free floor (ADR-0014). So
+"prefer `retrieve`" holds **when the semantic tier is present** (the MCP path, the norm);
+driving the raw CLI **without** MCP, `find` *is* your retrieval, and the degrade-to-find
+is by hand, not by the op. Don't reach for a `retrieve`/`search` CLI subcommand — there
+isn't one.
+
 Its value over "call `search`, and if it errors call `find`" is that the fallback is
 **mechanical, not yours to remember**: `retrieve` never raises on a down backend and
 never returns a misleading empty — it degrades to `find` *inside the call*. It stays
@@ -428,6 +443,14 @@ of `ask`/`synthesize`. Odin is the scribe, not the author.
      activates with `synthesize`). One cited `model-read` summary drags the whole
      answer to "model-read." Mirror the Core's `weakest_derivation` ordering — do
      not average or hand-wave.
+     - **Which rung — go by ADR-0011's definitions, not vibes (T-107).** `synthesis`
+       means specifically **cross-source *generative* reasoning** (an insight linking
+       docs). A **single-source deterministic computation** — an age from a DOB, a
+       total from line items — is **`extracted`**: its result is *checkable and
+       reproducible*, which is exactly what `extracted` denotes; it is neither
+       cross-source nor generative, so `synthesis` is wrong (it would overstate the
+       uncertainty). The "it's computed, not quoted" transparency lives in the body
+       (the datum + rule, per *Time-relative facts*), not in the rung.
    - **Capture tier:** if the answer rests on `reference`-tier sources (not held in
      full), flag that too.
    Say it plainly, e.g. "Answered from deterministic text ✓" vs "This rests on a
@@ -436,6 +459,82 @@ of `ask`/`synthesize`. Odin is the scribe, not the author.
    `question` doc via `derive --type question` — grounded and cited. Offer; don't
    clutter unasked. Never treat a derived doc as ground truth without the sources
    behind it.
+
+## Stage & review candidates (channel emergent augmentation — ADR-0033)
+
+While reasoning you will make **grounded new inferences** the base doesn't yet hold
+— computing an age from a date of birth, spotting a consequence two sources imply.
+That understanding is worth keeping, but **do not author it into the base as a side
+effect of `ask`** (consent-of-surprise; base bloat). And do **not** stop to ask
+"save this?" per inference (a capable model augments constantly — that nags). Instead:
+
+1. **Stage it.** `stage-candidate cand-<slug> --title "…" [--abstract "…"]
+   --source <src-…> [--source …]` with the grounded inference as the body, cited to
+   its sources. It lands in `candidates/` — **not** durable knowledge — grounded
+   sources-only (the Core rejects grounding in a derived doc: no chaining, even here).
+   The Core dedups: an equivalent pending or already-**declined** inference is not
+   re-staged (a sticky decline won't nag again — unless a cited source has since
+   changed). Staging is silent; don't announce each one.
+2. **Review in a batch (`review-candidates`), not per item.** On load, if
+   `list-candidates` shows any pending, **offer once** to run **`review-candidates`**
+   over them (this is the reliable moment — it rides the MUNINN.md on-load check; there
+   is no dependable session-*end* hook). For each candidate, **re-read its cited source
+   bytes** (borrow the Review discipline below — never trust the staged text) and decide:
+   - **promote (new doc)** → `promote-candidate cand-<slug>` writes it into the base as a
+     first-class derived doc (default an **insight**; `--new-id`/`--proposed-kind` to
+     steer), then `index` + `lint`. **Set the honest derivation rung here** (having
+     re-read the source): a single-source deterministic computation is `extracted`,
+     a cross-source connection is `synthesis` (see *Ask* §4). Staging leaves it unset.
+   - **fold (into an existing doc)** → `promote-candidate cand-<slug> --into <doc-id>`
+     when the fact belongs *on* an existing doc (an age onto `ent-strudel`), not as a
+     standalone. This is a **literal insert** (ADR-0035): the Core appends the
+     candidate's block byte-preserving the rest, unions its sources, drops the doc to the
+     weakest rung, and consumes the candidate. **Prefer folding over re-authoring the
+     target** — you don't rewrite the doc; you add to it. If a folded card later reads as
+     an accreted list, `regenerate` re-coalesces it cleanly (fold *adds*; regenerate
+     *re-derives*). Then `index` + `lint`. Fold **timeless** facts (a datum + rule, a
+     historically-dated measurement); a candidate stating a *decaying* result (one staged
+     with `--as-of`) **can't be folded** — a doc-level `as_of` can't describe one line of
+     a card, so the Core routes it to **promote-as-new** (its own aged doc) instead (T-109).
+   - **decline** → `decline-candidate cand-<slug> --reason "…"`; it becomes a
+     tombstone (remembered, never deleted).
+3. **Distinct from Crystallize (ask §5):** Crystallize offers to save the *answer the
+   user asked for*; staging captures an *incidental inference* you made along the way,
+   without interrupting, for later batched review. Both keep grounding honest; neither
+   ever writes to the base unreviewed.
+
+**Author candidate bodies to be self-contained**, so they read cleanly when folded in
+place (a fact that stands on its own, cited — not a fragment that needs surrounding prose).
+
+## On load — one `status` read, one nudge (ADR-0034)
+
+Before acting on a freshly-opened base, run **one** read — `status <base> --as-of
+<today>` — and surface its signals as a **single consolidated nudge**, never several
+competing prompts (that's the nagging we avoid):
+
+- `freshness: drifted|never-linted` → suggest `lint`.
+- `captures_since_lint > 0` → **offer** (once) to `synthesize` — never unasked.
+- `pending_candidates > 0` → **offer** (once) to `review-candidates`.
+- `stale` ids → offer `regenerate`.
+- `aged` (time-relative `as_of` docs past the window) → note they may have drifted.
+
+One line, e.g. *"since last check: 2 new sources · 3 candidates · 1 stale · 1 aging —
+handle any?"* If `status` is all-clear, stay quiet. `status` is read-only and
+deterministic given `(base, today)`; time enters **only** here, never in `lint`.
+(Add `--json` for the raw structured object on the CLI — `find`/`resolve`/
+`list-candidates` accept it too; over MCP the result is already structured.)
+
+## Time-relative facts — anchor on the datum, not the decaying result
+
+When you derive a fact whose truth depends on *today* — an age, "overdue", "expired
+last month" — **state the immutable datum and the rule, not the perishable result**:
+*"DOB 2022-05-04 (age = today − DOB)"*, not *"4 years old"*. Then it recomputes
+correctly on every read and never goes stale — and `lint` (change-based, ADR-0005)
+could never have caught its decay anyway. Only if a time-relative *result* must be
+written do you stamp it with `--as-of <date>` (on `derive`, or `stage-candidate` for a
+staged one), which the on-load `status` then ages. A dated result belongs in **its own
+doc** where a doc-level `as_of` is correct — so such a candidate promotes as-new and is
+**never folded** into a multi-fact card (the Core enforces this; T-109).
 
 ## Regenerate (heal a gap or refresh a stale page)
 

@@ -149,7 +149,87 @@ TOOLS = [
             "derivation": {"type": "string",
                            "enum": sorted(muninn_lint.DERIVATION_VALUES),
                            "description": "How it was derived (e.g. synthesis) — sets the integrity rung."},
+            "as_of": {"type": "string",
+                      "description": "ISO date a TIME-RELATIVE claim was true — surfaced/aged "
+                                     "on-load by `status`, never by lint (ADR-0034). Prefer "
+                                     "anchoring on the immutable datum + rule; this is the residual."},
         }, required=["root", "id", "body", "sources", "title"]),
+    },
+    {
+        "name": "odin_stage_candidate",
+        "description": "Stage an emergent grounded inference for later BATCHED review "
+                       "(ADR-0033). NOT admitted to the base — grounded sources-only "
+                       "(no chaining), deduped vs pending and vs declined tombstones "
+                       "(a sticky decline won't re-nag unless a cited source advances).",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "id": {"type": "string", "description": "Candidate id (must start 'cand-')."},
+            "body": {"type": "string", "description": "The grounded inference, cited to its sources."},
+            "sources": {"type": "array", "items": {"type": "string"},
+                        "description": "Grounding source ids (≥1). Sources only — never a derived doc."},
+            "title": {"type": "string"},
+            "abstract": {"type": "string"},
+            "proposed_kind": {"type": "string",
+                              "enum": ["summary", "entity", "concept", "question", "insight"],
+                              "default": "insight",
+                              "description": "What it becomes on promote."},
+            "derivation": {"type": "string", "enum": sorted(muninn_lint.DERIVATION_VALUES),
+                           "description": "The honest rung — set it, don't presume: a "
+                                          "single-source deterministic computation (an age) "
+                                          "is `extracted`, not `synthesis` (cross-source "
+                                          "generative). Unset → the reviewer sets it at "
+                                          "promotion (T-107)."},
+            "as_of": {"type": "string",
+                      "description": "ISO date IF this candidate states a TIME-RELATIVE "
+                                     "result — aged on-load once promoted as its OWN doc; "
+                                     "such a candidate can't be folded (T-109). Prefer the "
+                                     "datum + rule (no as_of)."},
+        }, required=["root", "id", "body", "sources", "title"]),
+    },
+    {
+        "name": "odin_list_candidates",
+        "description": "List pending candidates + the declined count — the on-load / "
+                       "review-candidates read (ADR-0033).",
+        "inputSchema": _obj({"root": _ROOT}, required=["root"]),
+    },
+    {
+        "name": "odin_promote_candidate",
+        "description": "Admit a pending candidate into the base. Default: promote as a "
+                       "new first-class derived doc (reuses derive; default an insight; "
+                       "ADR-0033). Or `into=<doc-id>` to FOLD it into an existing derived "
+                       "doc as a literal insert (append its authored block, union sources, "
+                       "consume the candidate; ADR-0035) — `regenerate` re-coalesces later.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "id": {"type": "string", "description": "The cand-… id to promote."},
+            "new_id": {"type": "string",
+                       "description": "Target derived id for a NEW doc (default: swap cand- for the kind prefix)."},
+            "into": {"type": "string",
+                     "description": "Existing derived doc id to FOLD into instead of writing new (ADR-0035)."},
+            "derivation": {"type": "string", "enum": sorted(muninn_lint.DERIVATION_VALUES)},
+        }, required=["root", "id"]),
+    },
+    {
+        "name": "odin_decline_candidate",
+        "description": "Decline a pending candidate — a fingerprint-keyed tombstone "
+                       "(never deleted; won't re-nag unless a cited source advances). ADR-0033.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "id": {"type": "string"},
+            "reason": {"type": "string"},
+        }, required=["root", "id"]),
+    },
+    {
+        "name": "odin_status",
+        "description": "On-load status surface (ADR-0034): freshness (fingerprint vs "
+                       "last lint), stale docs, pending candidates, captures-since-lint, "
+                       "and aged time-relative (`as_of`) docs — read-only, one call for a "
+                       "single consolidated nudge. Pass `as_of` (today) to age as_of docs.",
+        "inputSchema": _obj({
+            "root": _ROOT,
+            "as_of": {"type": "string",
+                      "description": "Today's date (ISO) — enables date-aging of as_of docs."},
+        }, required=["root"]),
     },
     {
         "name": "odin_index",
@@ -383,7 +463,18 @@ _DISPATCH = {
     "odin_derive": lambda root, p: core.write_derived(
         root, p["id"], body=p["body"], sources=p["sources"], title=p["title"],
         abstract=p.get("abstract"), type=p.get("type", "summary"),
+        derivation=p.get("derivation"), as_of=p.get("as_of"), derived_at=core._now()),
+    "odin_stage_candidate": lambda root, p: core.stage_candidate(
+        root, p["id"], body=p["body"], sources=p["sources"], title=p["title"],
+        abstract=p.get("abstract"), proposed_kind=p.get("proposed_kind", "insight"),
+        derivation=p.get("derivation"), as_of=p.get("as_of"), staged_at=core._now()),
+    "odin_list_candidates": lambda root, p: core.list_candidates(root),
+    "odin_status": lambda root, p: core.status(root, as_of=p.get("as_of")),
+    "odin_promote_candidate": lambda root, p: core.promote_candidate(
+        root, p["id"], new_id=p.get("new_id"), into=p.get("into"),
         derivation=p.get("derivation"), derived_at=core._now()),
+    "odin_decline_candidate": lambda root, p: core.decline_candidate(
+        root, p["id"], reason=p.get("reason"), declined_at=core._now()),
     "odin_index": lambda root, p: str(core.regenerate_index(root)),
     "odin_find": lambda root, p: core.find(root, p["query"], type=p.get("type")),
     "odin_project": lambda root, p: core.write_project(

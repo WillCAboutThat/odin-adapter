@@ -59,6 +59,7 @@ nobody can trace. Do not do it. It is also mechanically caught (see *lint*).
 muninn.yml     manifest — marks this a Muninn, records the format version
 MUNINN.md      this file
 inbox/         OPTIONAL, transient — drop docs here to ingest; not durable
+candidates/    OPTIONAL, transient — emergent inferences awaiting review; not durable (declined/ holds tombstones)
 sources/       immutable captured records (the only immutable tree)
 summaries/ entities/ concepts/ questions/ insights/   derived, regenerable knowledge
 projects/      curated views over the base (a source may be in many)
@@ -84,8 +85,22 @@ need the words "invariant" or "frontmatter" to use this well.
   it never commits to memory on its own. It ends by offering to *ingest*.
 - **regenerate** — deliberately re-derive a stale (or named) doc from its
   *current* sources. This is the *only* sanctioned way a stale doc gets rewritten.
+- **review-candidates** — review emergent inferences you *staged* while reasoning
+  (see below), and either **promote** each into the base or **decline** it. A
+  batched review, offered on load — never a per-inference interruption.
 - **lint** — "is our memory healthy?" Run the checks, report violations, flag
   staleness. It never edits derived content.
+
+**Staging emergent inferences — don't silently write them to memory.** While
+answering, you will sometimes make a *grounded* new inference the base doesn't yet
+hold (e.g. computing an age from a date of birth in a source). That is worth
+keeping — but do **not** author it into the base as a side effect of `ask`. Instead
+**stage** it as a *candidate* (grounded to its sources, cited): it waits in
+`candidates/`, not durable knowledge, until a batched **review-candidates** admits
+it (promote → an ordinary derived doc, usually an insight) or declines it. A
+declined inference is remembered, so it won't nag you again unless its sources
+change. This keeps the durable base clean by construction — nothing enters it
+unreviewed.
 
 Two guarantees to honor every time: **capture is visible** (say what you stored
 and where), and **answers are traceable** (cite the source, or say you're
@@ -100,26 +115,50 @@ human or an assistant scan the catalog without opening every file. Sources borro
 their description from the summary that covers them, so a source is never
 annotated in place (it is immutable).
 
-## On load — check freshness first
+## On load — one status check, one nudge
 
-Whenever you open this base, before acting:
+Whenever you open this base, before acting, run **one** read — `status` (pass
+today's date so time-relative facts are aged):
 
-1. Recompute the **content fingerprint** (the format's change hash over all
-   registered docs).
-2. Compare it to the fingerprint in the **last `lint` entry** in `log.md`
-   (`grep "] lint |" log.md | tail -1`).
-3. If they **differ**, the base changed since it was last checked — tell the user
-   plainly and suggest `lint`. If they **match**, stay quiet.
-4. **Proactive synthesize (on load).** If the change **added new sources**, you may
-   also **offer** — once — to look for the connections they form with existing
-   memory: *"N new sources since last check; want me to look for connections?"*
-   **Offer only; never run `synthesize` unasked** (it spends real tokens, and
-   proposing-not-writing extends to proposing-not-scanning). On a yes, run the normal
-   `synthesize` flow. Skip the offer if only derived docs changed — a `regenerate`
-   adds nothing new to connect.
+```
+status <this-base> --as-of <today>
+```
 
-This is a change-based nudge, not a time-based one. A specific tool may make it
-deterministic via a session-start hook.
+It returns everything worth raising on load, computed deterministically:
+
+- **freshness** — `never-linted` / `fresh` / `drifted` (the content fingerprint vs.
+  the last `lint`). `drifted` or `never-linted` → suggest `lint`.
+- **captures since last lint** — new sources to reason over → the **proactive
+  synthesize** offer: you may **offer**, once, to look for the connections they form.
+  Offer only; **never run `synthesize` unasked** (it spends real tokens, so
+  proposing-not-writing extends to proposing-not-scanning).
+- **pending candidates** — inferences you staged awaiting review → **offer**, once,
+  to run **`review-candidates`**. This is the reliable review moment: it rides this
+  on-load read, needs no session-end hook (there is no dependable way to intercept a
+  session ending), and warm context isn't required — a candidate carries its own
+  grounding and is re-checked against source bytes at review.
+- **stale docs** — derived docs whose source changed → offer `regenerate`.
+- **aged facts** — docs carrying a time-relative `as_of` older than the window (see
+  *Time-relative facts* below) → note they may have drifted with the calendar.
+
+**Surface these as ONE consolidated nudge**, not several competing prompts — e.g.
+*"since last check: 2 new sources · 3 candidates to review · 1 stale doc · 1 aging
+fact — want to handle any?"* — a single legible offer the user can take or defer. If
+`status` is all-clear, stay quiet.
+
+Freshness/staleness are **change-based** (a fingerprint moved), never time-based —
+that keeps `lint` reproducible. The one time-based signal (`aged`) lives here, on the
+session surface, because only a session knows "today"; it is never a lint error.
+
+## Time-relative facts — anchor on the datum, not the decaying result
+
+A fact whose truth depends on *today* — an age, "overdue", "expired last month" —
+will silently go wrong as the calendar advances, and no source changes, so `lint`
+can never catch it. So when you derive such a fact, **state the immutable datum and
+the rule, not the perishable result**: write *"DOB 2022-05-04 (age = today − DOB)"*,
+not *"4 years old"*. Then it is recomputed correctly every time it's read, and never
+goes stale. Only if a time-relative *result* must be written anyway do you stamp it
+with `as_of: <date>` (via `derive --as-of`), which the on-load `status` then ages.
 
 ## What is guaranteed vs. what needs judgment
 
