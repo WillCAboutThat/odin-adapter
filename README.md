@@ -111,6 +111,86 @@ talk: *"odin, set up a knowledge base here and remember this document…"*. Odin
 will confirm **where the base lives**, capture your first source with
 provenance, and the base explains itself from then on (see its `MUNINN.md`).
 
+## What using it looks like
+
+There are no commands to learn — you talk, and Odin runs the machinery. Two
+short walks show the shape of it.
+
+### A personal base — the family's paperwork
+
+**Day 1 — start remembering.**
+
+> *"odin, set up a knowledge base in `~/family-kb`. Here's Strudel's vet
+> record — remember it."*
+
+Odin confirms the location, scaffolds the base, and captures the record: an
+**immutable copy** of the file, its origin, and its **content hash** — then
+writes a short summary *cited to that source* and puts both on the index. It
+tells you exactly what it stored and where. Drop in more over time — the rabies
+certificate, the pasta sauce recipe, the apartment lease. Same ritual every
+time; duplicates are recognized by content and never stored twice.
+
+**Whenever — ask your own memory.**
+
+> *"When is Strudel's next rabies shot due?"*
+
+Odin reads its summaries, opens the sources that matter, and answers **with the
+citation attached**: *"March 2027 — per the vaccination certificate
+[src-rabies-cert]."* If the base doesn't know, it says so — it never pads an
+answer with a guess dressed up as memory.
+
+**Months later — the part everything else gets wrong.**
+
+> *"Here's the updated lease."*
+
+The old lease isn't overwritten — the new bytes become a **new version**, and
+every summary or note that rested on the old one is **automatically flagged
+stale**, because its provenance names the exact bytes it was written from.
+Odin surfaces the flag and offers to regenerate; nothing is ever silently
+"fixed." Ask *"is our memory healthy?"* any time — that's `lint`, the same
+check that guarantees all of the above structurally.
+
+### A professional base — a consulting engagement
+
+Same tool, higher stakes: capture the client contract, discovery-call notes,
+and the vendor quotes as they arrive. Then the verbs that earn their keep:
+
+- *"What did we actually commit to in the June scope change?"* — an answer
+  **cited to the contract**, not a vibe.
+- *"Have a look across everything and tell me what connects."* — `synthesize`:
+  Odin proposes cross-source insights (e.g. *the quoted onboarding fee
+  contradicts §4 of the master agreement*), each grounded in and cited to the
+  sources that support it — and **proposes before writing**; you review what
+  enters your base.
+- Along the way Odin sometimes notices something worth keeping mid-answer. It
+  **stages** it as a candidate instead of silently writing memory; on a later
+  session it offers the pending pile for a one-shot review.
+
+### The loop, in one picture
+
+```mermaid
+flowchart LR
+    You(["You: 'remember this'"]) --> Cap["Immutable source copy<br/>+ origin + content hash"]
+    Cap --> Sum["Summary written,<br/>cited to that source only"]
+    Sum --> Idx["Skimmable index"]
+    Idx --> Ask(["You: 'what do we know?'"])
+    Ask --> Ans["Answer, cited to sources"]
+    New(["Source changes later"]) --> Ver["New version captured"]
+    Ver --> Stale["Everything resting on the old<br/>bytes is flagged STALE"]
+    Stale --> Fix(["You choose: regenerate"])
+```
+
+Phrases worth knowing (all plain language — these are the verbs underneath):
+**"remember this"** (ingest) · **"what do we know about…?"** (ask) ·
+**"find the lease"** (find — deterministic, works with no AI at all) ·
+**"what connects across our sources?"** (synthesize) · **"go look at that
+folder/repo and report"** (explore — reports transiently; nothing enters the
+base without a consented ingest) · **"is our memory healthy?"** (lint).
+
+And everything above lands as plain Markdown + links in a folder you own —
+readable in any editor, browsable in Obsidian, verifiable years from now with
+no AI and no vendor.
+
 ## Configuration — all optional
 
 **Odin needs no configuration.** Install it and talk; every default works out of
