@@ -10,10 +10,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from . import util  # noqa: E402  (module-attr access = the patch point)
 from .candidates import decline_candidate, list_candidates, promote_candidate, stage_candidate  # noqa: E402
-from .capture import capture, capture_file, capture_repo, dedup_check, retier, source_status  # noqa: E402
+from .capture import capture, capture_file, capture_repo, dedup_check, log_drift_check, retier, source_status  # noqa: E402
 from .decisions import lint_report, record_decision, status  # noqa: E402
 from .derive import relink, stamp_derived, write_derived  # noqa: E402
-from .projections import connector_projection, find, fingerprint, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
+from .projections import connector_projection, drift_worklist, find, fingerprint, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
 from .scaffold import init  # noqa: E402
 from .usage import _source_bytes, log_usage, usage_html, usage_log, usage_report  # noqa: E402
 
@@ -251,8 +251,9 @@ OPS = {
         "handler": lambda root, p: source_status(root, p["id"]),
     },
     "retier": {
-        "help": "deliberately correct a source's capture tier (full|reference) — "
-                "the consented repair for a misjudged tier (T-134)",
+        "help": "deliberately correct a source's capture facts — tier "
+                "(full|reference, T-134) and/or recoverable (the drift-check "
+                "never-retry mark, T-136)",
         "description": "Correct a source's capture tier. The tier describes what "
                        "the base HOLDS (ADR-0003): full = the complete artifact "
                        "bytes are the canonical record (even when the upstream "
@@ -267,14 +268,62 @@ OPS = {
             "id": {"type": "string", "description": "The source id.",
                    "required": True, "cli": {"positional": True}},
             "tier": {"type": "string", "enum": ["full", "reference"],
-                     "required": True,
                      "description": "The corrected tier."},
             "reason": {"type": "string",
                        "description": "capture_reason — required when tier is "
                                       "reference (ADR-0003 IFF)."},
+            "recoverable": {"type": "boolean", "cli": {"tristate": True},
+                            "description": "Correct origin.recoverable — False is "
+                                           "the standing never-retry mark the "
+                                           "drift-check sweep honors (T-136); flip "
+                                           "True when the system returns."},
         },
-        "handler": lambda root, p: retier(root, p["id"], p["tier"],
-                                          reason=p.get("reason")),
+        "handler": lambda root, p: retier(root, p["id"], p.get("tier"),
+                                          reason=p.get("reason"),
+                                          recoverable=p.get("recoverable")),
+    },
+    "drift-worklist": {
+        "help": "enumerate the recoverable connector sources whose remote may "
+                "have moved — the deterministic worklist for the consented "
+                "drift-check sweep (T-136)",
+        "description": "The drift-check sweep's deterministic worklist: "
+                       "recoverable, connector-origin sources (local file/chat/"
+                       "inbox never drift remotely). Default scope is the global "
+                       "view's members; `project` unions that project's members "
+                       "(T-128 semantics); `all` sweeps every source. Read-only: "
+                       "the fetch/compare/re-capture that follow are adapter "
+                       "orchestration over fetch + dedup-check + capture, always "
+                       "consented, never a daemon.",
+        "params": {"root": _ROOT_P,
+                   "project": {"type": "string",
+                               "description": "Project id to union with the "
+                                              "global scope."},
+                   "all": {"type": "boolean",
+                           "description": "Sweep every source in the base "
+                                          "(sources in no view are otherwise "
+                                          "never swept)."}},
+        "handler": lambda root, p: drift_worklist(root, project=p.get("project"),
+                                                  all=bool(p.get("all"))),
+    },
+    "drift-log": {
+        "help": "record a completed drift-check sweep in the append-only log "
+                "(the sweep's memory; T-136)",
+        "description": "Append the drift-check outcome (same/changed/unreachable "
+                       "counts + optional detail) to log.md — status reads the "
+                       "latest entry for its quiet 'world last checked' line, and "
+                       "the adapter reads recent entries to voice unreachable "
+                       "streaks before offering the never-retry flip.",
+        "params": {"root": _ROOT_P,
+                   "same": {"type": "integer", "description": "Unchanged count."},
+                   "changed": {"type": "integer", "description": "Changed count."},
+                   "unreachable": {"type": "integer",
+                                   "description": "Unreachable count."},
+                   "detail": {"type": "string",
+                              "description": "Optional ids/notes, e.g. "
+                                             "'unreachable: src-x (2nd consecutive)'."}},
+        "handler": lambda root, p: log_drift_check(
+            root, same=p.get("same") or 0, changed=p.get("changed") or 0,
+            unreachable=p.get("unreachable") or 0, detail=p.get("detail")),
     },
     "derive": {
         "help": "write a derived doc (body from --file or stdin)",

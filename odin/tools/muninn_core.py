@@ -49,6 +49,7 @@ from muninn.capture import (  # noqa: E402,F401
     _capture,
     capture_repo,
     dedup_check,
+    log_drift_check,
     retier,
     source_status,
 )
@@ -78,6 +79,7 @@ from muninn.projections import (  # noqa: E402,F401
     _cover_map,
     _blurb,
     _index_markers,
+    drift_worklist,
     regenerate_index,
     fingerprint,
     find,

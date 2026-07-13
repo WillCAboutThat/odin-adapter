@@ -480,3 +480,65 @@ def connector_projection(root, project=None):
            for (s, r), ids in conns.items()]
     out.sort(key=lambda c: (c["system"], c["ref"] or ""))
     return out
+
+
+def drift_worklist(root, project=None, all=False):
+    """The deterministic worklist for the consented **drift-check** sweep (T-136):
+    the recoverable, connector-origin sources whose remote system may have moved.
+    Hash staleness (L4) measures the base against itself; currency with the WORLD
+    costs a deliberate reach, and this op names exactly what is worth reaching for.
+
+    Scope: default is the **global view's members** (the always-in-scope world);
+    `project` unions that project's members (T-128 semantics); `all=True` sweeps
+    every source in the base (a source that is a member of no view is otherwise
+    never swept). Local origins (`file`, `chat`, `inbox`) never drift remotely and
+    are excluded. `recoverable` must be True — False is the standing never-retry
+    mark (flip it back with `retier --recoverable true` when a system returns),
+    and unset means the capture never claimed re-fetchability.
+
+    Returns `[{id, origin_system, origin_ref, tier, version, captured_at}]`,
+    sorted by id. Read-only; the fetch/compare/re-capture that follow are the
+    adapter's consented orchestration over `fetch` + `dedup-check` + `capture`.
+    """
+    root = Path(root)
+    linter = Linter(root)
+    linter.load()
+    by_id = {d.id: d for d in linter.docs}
+
+    if all:
+        candidates = [d for d in linter.docs if d.kind == "source"]
+    else:
+        members: list[str] = []
+        for d in linter.docs:
+            if d.kind == "project" and d.data.get("scope") == "global":
+                for m in (d.data.get("members") or []):
+                    if m not in members:
+                        members.append(m)
+        if project is not None:
+            pdoc = by_id.get(project)
+            if pdoc is None or pdoc.kind != "project":
+                raise ValueError(f"no such project: {project}")
+            for m in (pdoc.data.get("members") or []):
+                if m not in members:
+                    members.append(m)
+        candidates = [by_id[m] for m in members
+                      if m in by_id and by_id[m].kind == "source"]
+
+    out = []
+    for d in candidates:
+        origin = d.data.get("origin") or {}
+        system = origin.get("system")
+        if not system or system in _LOCAL_ORIGINS or system == "inbox":
+            continue
+        if origin.get("recoverable") is not True:
+            continue
+        out.append({
+            "id": d.id,
+            "origin_system": system,
+            "origin_ref": origin.get("ref"),
+            "tier": d.data.get("capture", "full"),
+            "version": d.data.get("version", 1),
+            "captured_at": str(d.data.get("captured_at") or ""),
+        })
+    out.sort(key=lambda w: w["id"])
+    return out

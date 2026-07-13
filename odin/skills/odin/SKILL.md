@@ -610,6 +610,10 @@ competing prompts (that's the nagging we avoid):
 - `pending_candidates > 0` → **offer** (once) to `review-candidates`.
 - `stale` ids → offer `regenerate`.
 - `aged` (time-relative `as_of` docs past the window) → note they may have drifted.
+- `recoverable_connector_sources > 0` **and** `last_drift_check` is null or old →
+  append one quiet clause: *"world unchecked since <date>"* (or *"never"*). A
+  **mention, never an auto-run** — `drift-check` reaches outward and is always
+  the user's deliberate act (T-136).
 
 One line, e.g. *"since last check: 2 new sources · 3 candidates · 1 stale · 1 aging —
 handle any?"* If `status` is all-clear, stay quiet. `status` is read-only and
@@ -628,6 +632,50 @@ written do you stamp it with `--as-of <date>` (on `derive`, or `stage-candidate`
 staged one), which the on-load `status` then ages. A dated result belongs in **its own
 doc** where a doc-level `as_of` is correct — so such a candidate promotes as-new and is
 **never folded** into a multi-fact card (the Core enforces this; T-109).
+
+## Drift-check (currency with the WORLD — a deliberate, consented sweep; T-136)
+
+Hash staleness (L4) measures the base **against itself**: a remote system's
+update is invisible until someone reaches out. `drift-check` is that reach —
+**on the user's word, never automatic, never a daemon** (a base must verify
+with no connectivity forever, ADR-0008; reaching is Huginn's consented act).
+
+1. **Worklist (Core, deterministic).** `… drift-worklist <root> [--project <id>]
+   [--all]` — the recoverable, connector-origin sources whose remote may have
+   moved. Default scope is the **global view's members**; `--project` unions
+   that project's (T-128); `--all` sweeps every source — **offer `--all` when
+   the default comes back thin** (sources in no view are otherwise never swept).
+2. **Reach and compare, per item.** `fetch` the current remote (your connector,
+   one bounded retry on a transient failure), then the **Core compares**:
+   `… dedup-check <root> --source-file <fetched> --id <src-id>` →
+   *already-captured* (same) / *changed*. You never eyeball-diff or hash.
+   A locator-only reference source gets a reachability check; a stand-in-bodied
+   one compares against the stand-in — **say so** when reporting it.
+3. **Report the sweep**: one table — **same / changed / unreachable** — then
+   record it: `… drift-log <root> --same N --changed M --unreachable K
+   [--detail …]`. The log is the sweep's memory (`status` reads it for the
+   quiet "world unchecked since" line; you read recent entries to voice
+   **streaks**: *"src-x unreachable, 3rd consecutive sweep"*).
+4. **Changed → offer re-capture, per item.** A consented re-capture under the
+   **same id** versions the source, and L4 then flags every dependent doc
+   automatically — the flags do the rest; heal with `regenerate` on the user's
+   word. Never re-capture unasked.
+5. **Unreachable is a transport fact, not a drift conclusion.** Report it,
+   never write from it. After a visible streak, **offer** the standing
+   never-retry mark: `… retier <root> <id> --no-recoverable` (drops it from
+   future worklists; the flip is logged and reverses with `--recoverable` if
+   the system returns). Retiring the source or its dependents is a separate,
+   also-consented conversation.
+
+**Cadence is the user's** (the cost of freshness stays explicit): suggest it
+before load-bearing decisions and periodically for active bases — never
+schedule it yourself. **Voice the snapshot age meanwhile**: an answer grounded
+in a connector source that a fresh reader might assume is live cites *"as
+captured <date>"* so the reader inherits the epistemic state.
+
+**Never:** run a sweep unasked; conclude drift from a fetch failure; re-capture
+without the per-item nod; compute a hash yourself. **Writes:** only the
+`drift-log` entry — everything else is offers.
 
 ## Regenerate (heal a gap or refresh a stale page)
 

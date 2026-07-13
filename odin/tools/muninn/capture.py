@@ -460,7 +460,7 @@ def source_status(root, id):
 
 
 @_locked
-def retier(root, id, tier, *, reason=None):
+def retier(root, id, tier=None, *, reason=None, recoverable=None):
     """Deliberately correct a source's **capture tier** (T-134) — the consented
     repair for a misjudged tier, which previously had no path at all (an
     identical-byte re-capture dedups to a no-op; a meta.yml hand-edit is the
@@ -473,9 +473,17 @@ def retier(root, id, tier, *, reason=None):
     `capture_reason`; bytes, content_hash, version, and history are untouched,
     so every derived doc's provenance still verifies unchanged.
 
-    Returns ``{"id", "tier", "previous_tier", "capture_reason", "changed"}``.
+    Since T-136 it also corrects **`origin.recoverable`** — the standing
+    never-retry / try-again mark the drift-check sweep honors (False drops a
+    source from the worklist; flip back True when the system returns). At least
+    one correction (tier or recoverable) must be given.
+
+    Returns ``{"id", "tier", "previous_tier", "capture_reason", "recoverable",
+    "changed"}``.
     """
-    if tier not in ("full", "reference"):
+    if tier is None and recoverable is None:
+        raise ValueError("retier needs a correction: tier and/or recoverable")
+    if tier is not None and tier not in ("full", "reference"):
         raise ValueError(f"tier must be 'full' or 'reference', got {tier!r}")
     root = Path(root)
     meta_p = root / "sources" / id / "meta.yml"
@@ -483,19 +491,48 @@ def retier(root, id, tier, *, reason=None):
         raise ValueError(f"no such source: {id}")
     meta = _load_yaml(meta_p)
     prev = meta.get("capture", "full")
+    origin = meta.get("origin") or {}
+    prev_rec = origin.get("recoverable")
     if tier == "reference" and not (reason or "").strip():
         raise ValueError("a reference-tier source requires a capture_reason "
                          "(ADR-0003: required IFF capture: reference)")
-    if prev == tier and (tier == "full" or meta.get("capture_reason") == reason):
-        return {"id": id, "tier": tier, "previous_tier": prev,
-                "capture_reason": meta.get("capture_reason"), "changed": False}
-    meta["capture"] = tier
-    meta["capture_reason"] = reason if tier == "reference" else None
+    tier_change = tier is not None and not (
+        prev == tier and (tier == "full" or meta.get("capture_reason") == reason))
+    rec_change = recoverable is not None and prev_rec != bool(recoverable)
+    if not tier_change and not rec_change:
+        return {"id": id, "tier": prev, "previous_tier": prev,
+                "capture_reason": meta.get("capture_reason"),
+                "recoverable": prev_rec, "changed": False}
+    parts = []
+    if tier_change:
+        meta["capture"] = tier
+        meta["capture_reason"] = reason if tier == "reference" else None
+        parts.append(f"{prev} -> {tier}" + (f" ({reason})" if tier == "reference" else ""))
+    if rec_change:
+        origin["recoverable"] = bool(recoverable)
+        meta["origin"] = origin
+        parts.append(f"recoverable {prev_rec} -> {bool(recoverable)}")
     tmp = meta_p.with_name(".meta.yml.tmp")
     tmp.write_text(_dump_yaml(meta), encoding="utf-8")
     tmp.replace(meta_p)
-    _append_log(root, util._now(),
-                f"retier {id}: {prev} -> {tier}"
-                + (f" ({reason})" if tier == "reference" else ""))
-    return {"id": id, "tier": tier, "previous_tier": prev,
-            "capture_reason": meta.get("capture_reason"), "changed": True}
+    _append_log(root, util._now(), f"retier | {id}: " + "; ".join(parts))
+    return {"id": id, "tier": meta.get("capture", prev), "previous_tier": prev,
+            "capture_reason": meta.get("capture_reason"),
+            "recoverable": origin.get("recoverable"), "changed": True}
+
+
+def log_drift_check(root, *, same=0, changed=0, unreachable=0, detail=None):
+    """Record a completed drift-check sweep in the append-only ADR-0005 log
+    (T-136). The log is the sweep's memory: `status` reads the latest entry for
+    its quiet "world last checked" line, and the adapter reads recent entries to
+    voice unreachable STREAKS ("3rd consecutive sweep") before offering the
+    never-retry flip. Deliberately durable-log, not disposable-index: a sweep is
+    a deliberate act worth remembering, like a lint."""
+    root = Path(root)
+    line = f"drift-check | same={int(same)} changed={int(changed)} unreachable={int(unreachable)}"
+    if detail:
+        line += f" | {detail}"
+    when = util._now()
+    _append_log(root, when, line)
+    return {"logged_at": when, "same": int(same), "changed": int(changed),
+            "unreachable": int(unreachable)}

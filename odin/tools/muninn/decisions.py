@@ -53,6 +53,22 @@ def _captures_since_last_lint(root: Path) -> int:
     return sum(1 for s in entries[last_lint + 1:] if _op(s) == "capture")
 
 
+def _last_drift_check(root: Path):
+    """Timestamp of the most recent `drift-check` log entry (T-136), or None —
+    the sweep's memory lives in the same append-only ADR-0005 log as lint's."""
+    logp = root / "log.md"
+    if not logp.exists():
+        return None
+    last = None
+    for s in logp.read_text(encoding="utf-8").splitlines():
+        s = s.strip()
+        if s.startswith("## [") and "]" in s:
+            op = s.split("]", 1)[1].split("|", 1)[0].strip()
+            if op == "drift-check":
+                last = s[len("## ["):].split("]", 1)[0]
+    return last
+
+
 def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
     """The on-load status surface (ADR-0034). Read-only; composes the signals worth
     raising on load into one summary the adapter renders as a single nudge:
@@ -110,6 +126,17 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
                 aged.append({"id": d.id, "as_of": str(av), "days_old": days})
         aged.sort(key=lambda a: -a["days_old"])
 
+    # the world-currency facts (T-136): how many sources COULD drift remotely,
+    # and when the world was last deliberately checked — so the on-load nudge
+    # can add one quiet clause (mention, never an auto-run).
+    _local = {"file", "chat", "inbox"}
+    recoverable_connectors = sum(
+        1 for d in linter.docs
+        if d.kind == "source"
+        and (d.data.get("origin") or {}).get("system") not in _local
+        and (d.data.get("origin") or {}).get("system")
+        and (d.data.get("origin") or {}).get("recoverable") is True)
+
     return {
         "freshness": freshness,
         "fingerprint": current_fp,
@@ -118,6 +145,8 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
         "captures_since_lint": _captures_since_last_lint(root),
         "aged": aged,
         "as_of": as_of,
+        "last_drift_check": _last_drift_check(root),
+        "recoverable_connector_sources": recoverable_connectors,
     }
 
 
