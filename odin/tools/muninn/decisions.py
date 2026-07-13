@@ -9,10 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import muninn_lint  # noqa: E402
-from muninn_lint import (  # noqa: E402  (shared model + hashing)
-    Linter,
-)
-from . import util  # noqa: E402  (module-attr access = the patch point)
+from . import snapshot, util  # noqa: E402  (module-attr access = the patch point)
 from .candidates import list_candidates  # noqa: E402
 from .util import _append_log, _dump_yaml, _load_yaml, _locked, _valid_id  # noqa: E402
 
@@ -67,19 +64,38 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
       - aged       : {id, as_of, days_old} for `as_of` docs older than the window (T-104)
 
     `aged` is empty unless `as_of` (today) is supplied — time only enters here, never lint.
+
+    CHEAP by design (T-116): runs on the loaded snapshot (recorded hashes only —
+    no canonical byte re-hashing, no full rule sweep). The L4 staleness condition
+    is computed directly from frontmatter, which is all it ever needed. Integrity
+    of the bytes themselves (L5 etc.) is `lint`'s job — the deliberate check, not
+    the on-load read. On the 130-source Yosemite base this took status from
+    ~950ms to a few ms warm.
     """
     root = Path(root)
-    linter = Linter(root)
-    linter.load()
-    linter.check()
+    linter = snapshot.load_snapshot(root)   # loaded, never check()ed (read-only)
 
     current_fp = linter.content_fingerprint()
     recorded_fp = muninn_lint.last_lint_fingerprint(root)
     freshness = ("never-linted" if recorded_fp is None
                  else "fresh" if recorded_fp == current_fp else "drifted")
 
-    id_by_path = {str(d.path): d.id for d in linter.docs}
-    stale = sorted({id_by_path.get(f.path, f.path) for f in linter.findings if f.rule == "L4"})
+    # the L4 condition, straight from frontmatter: a cited source's CURRENT
+    # recorded hash advanced past the provenance hash, and the doc isn't flagged
+    stale = []
+    for d in linter.docs:
+        if d.kind != "derived" or d.data.get("status") == "stale":
+            continue
+        for s in (d.data.get("sources") or []):
+            if not isinstance(s, dict) or not s.get("hash"):
+                continue
+            src = linter.by_id.get(s.get("id"))
+            if (src is not None and src.kind == "source"
+                    and src.data.get("content_hash")
+                    and s["hash"] != src.data["content_hash"]):
+                stale.append(d.id)
+                break
+    stale = sorted(set(stale))
 
     aged = []
     if as_of:
@@ -209,9 +225,27 @@ def record_decision(root, id, *, body, title=None, status=None, evidence=None,
             "evidence": [e["id"] for e in evidence_list], "action": action}
 
 
+def record_lint_entry(root, *, ok, n_errors, n_warnings, fingerprint) -> None:
+    """Append the standardized ADR-0005 lint entry to `log.md` — the freshness
+    baseline `status` compares against. A faithful record of a result lint just
+    computed deterministically (T-124): before this, the entry had NO writer on
+    the CLI/MCP paths (only adapter prose), so real bases read `never-linted`
+    forever. Guarded: never writes into a directory that isn't a Muninn. Safe by
+    construction: log.md is excluded from the content fingerprint (SPEC §4.4),
+    so recording a lint never itself causes drift."""
+    root = Path(root)
+    if not (root / "muninn.yml").exists():
+        return
+    _append_log(root, util._now(),
+                f"lint | {'pass' if ok else 'fail'} | {n_errors} errors "
+                f"{n_warnings} warn | fingerprint={fingerprint}")
+
+
 def lint_report(root) -> dict:
     """Structured lint — the Linter's findings without printing/exit-code; the
-    shape `odin_lint` (MCP) and `lint --json` (CLI) both return."""
+    shape `odin_lint` (MCP) and `lint --json` (CLI) both return. Records the
+    ADR-0005 baseline entry (T-124); the Linter ENGINE stays side-effect-free —
+    recording lives here, at the op layer."""
     linter = muninn_lint.Linter(Path(root))
     linter.load()
     linter.check()
@@ -220,5 +254,8 @@ def lint_report(root) -> dict:
     warnings = [{"rule": f.rule, "message": f.message, "path": f.path}
                 for f in linter.findings if f.severity == "warn"]
     n_docs = len([d for d in linter.docs if d.kind != "manifest"])
+    fingerprint = linter.content_fingerprint()
+    record_lint_entry(root, ok=not errors, n_errors=len(errors),
+                      n_warnings=len(warnings), fingerprint=fingerprint)
     return {"ok": not errors, "errors": errors, "warnings": warnings,
-            "n_docs": n_docs, "fingerprint": linter.content_fingerprint()}
+            "n_docs": n_docs, "fingerprint": fingerprint}

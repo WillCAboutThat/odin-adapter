@@ -8,10 +8,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from muninn_lint import (  # noqa: E402  (shared model + hashing)
-    Linter,
-)
-from . import util  # noqa: E402  (module-attr access = the patch point)
+from . import snapshot, util  # noqa: E402  (module-attr access = the patch point)
 
 
 # --------------------------------------------------------------------------- #
@@ -234,8 +231,7 @@ def _scope_bytes(root, ids) -> int:
     doc (summary/insight/decision/…) counts its file size. Unknown ids count 0. This
     is the honest *proxy* for cost when real token counts aren't exposed (T-088)."""
     root = Path(root)
-    linter = Linter(root)
-    linter.load()
+    linter = snapshot.load_snapshot(root)   # read-only; reused until the base changes (T-116)
     total = 0
     for i in ids or []:
         d = linter.by_id.get(i)

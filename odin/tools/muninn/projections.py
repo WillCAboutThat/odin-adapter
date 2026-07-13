@@ -13,7 +13,7 @@ from muninn_lint import (  # noqa: E402  (shared model + hashing)
     current_canonical,
     source_text,
 )
-from . import util  # noqa: E402  (module-attr access = the patch point)
+from . import snapshot, util  # noqa: E402  (module-attr access = the patch point)
 from .util import _append_log, _dump_yaml, _locked, _valid_id  # noqa: E402
 
 
@@ -171,8 +171,7 @@ def find(root, query, type=None):
     """
     root = Path(root)
     terms = [t for t in query.lower().split() if t]
-    linter = Linter(root)
-    linter.load()
+    linter = snapshot.load_snapshot(root)   # read-only; reused until the base changes (T-116)
     order = {"source": 0, "derived": 1, "project": 2, "decision": 3}
     results = []
     for d in linter.docs:

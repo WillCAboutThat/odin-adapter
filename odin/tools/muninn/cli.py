@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import muninn_lint  # noqa: E402
+from .decisions import record_lint_entry  # noqa: E402
 from .registry import OPS, run_op  # noqa: E402
 
 
@@ -136,9 +137,18 @@ def _main(argv=None):
         params[cli["body_param"]] = _read_body(args)
     root = params.pop("root")
 
-    # lint keeps its human contract: the Linter's own report + exit code
+    # lint keeps its human contract: the Linter's own report + exit code —
+    # plus the ADR-0005 baseline entry (T-124), recorded at the op layer here
+    # exactly as lint_report records it for --json/MCP.
     if args.cmd == "lint" and not args.as_json:
-        return muninn_lint.Linter(Path(root)).run()
+        linter = muninn_lint.Linter(Path(root))
+        code = linter.run()
+        errors = [f for f in linter.findings if f.severity == "error"]
+        warns = [f for f in linter.findings if f.severity == "warn"]
+        record_lint_entry(root, ok=not errors, n_errors=len(errors),
+                          n_warnings=len(warns),
+                          fingerprint=linter.content_fingerprint())
+        return code
 
     res = run_op(OPS, args.cmd, root, params)
     if spec.get("presenter") and not args.as_json:

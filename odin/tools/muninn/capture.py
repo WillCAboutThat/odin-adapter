@@ -15,7 +15,7 @@ from muninn_lint import (  # noqa: E402  (shared model + hashing)
     content_hash_of_canonical,
     current_canonical,
 )
-from . import util  # noqa: E402  (module-attr access = the patch point)
+from . import snapshot, util  # noqa: E402  (module-attr access = the patch point)
 from .util import _append_log, _dump_yaml, _load_yaml, _locked, _valid_id  # noqa: E402
 
 
@@ -127,10 +127,41 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
     aid_name = "source-text.md" if text is not None else None
     sources = root / "sources"
 
-    # --- hash-first dedup across ALL existing sources (by canonical bytes) --- #
+    # --- hash-first dedup (T-116: O(1) via the disposable hash-index) -------- #
+    # The index (ADR-0027 tier) is validated by a stat-only sweep and any HIT is
+    # verified against the one meta.yml it names — never authoritative: a wrong
+    # index costs a fallback to the original full scan, never a wrong answer.
     ref = (origin or {}).get("ref")
     ref_match = None  # first existing source sharing this origin.ref (locator rung)
-    if sources.is_dir():
+    idx = None
+    try:
+        idx = snapshot.current_hash_index(root)
+        cand = idx["by_hash"].get(h)
+        if cand is not None:
+            meta_p = sources / cand / "meta.yml"
+            existing = _load_yaml(meta_p) if meta_p.exists() else {}
+            if existing.get("content_hash") == h:          # verify the hit
+                ex_id = existing.get("id", cand)
+                _append_log(root, when,
+                            f"capture | dedup | {ex_id} (also via {origin.get('system', '?')})")
+                return {"id": ex_id, "action": "deduped",
+                        "version": existing.get("version", 1),
+                        "path": str(sources / cand),
+                        "content_hash": h, "canonical": None}
+            idx = None                                     # index lied → distrust it
+        if idx is not None and ref:
+            cand = idx["by_ref"].get(str(ref))
+            if cand is not None and cand != id:
+                meta_p = sources / cand / "meta.yml"
+                existing = _load_yaml(meta_p) if meta_p.exists() else {}
+                if (existing.get("origin") or {}).get("ref") == ref:   # verify
+                    ref_match = existing.get("id", cand)
+                else:
+                    idx = None
+    except Exception:
+        idx = None
+    if idx is None and sources.is_dir():
+        # fallback: the original full scan (correctness never rests on the index)
         for child in sorted(sources.iterdir()):
             meta_p = child / "meta.yml"
             if not child.is_dir() or not meta_p.exists():
@@ -234,6 +265,8 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
             (sdir / cur_aid).unlink()          # new version is bytes-only
         tmp_meta.replace(meta_p)               # THE commit point
         _append_log(root, when, f"capture | version {new_n} | {id} supersedes v{cur_n}")
+        if idx is not None:                    # write-through (T-116); best-effort
+            snapshot.note_capture(root, idx, content_hash=h, ref=ref, id=id)
         return {"id": id, "action": "versioned", "version": new_n,
                 "path": str(sdir), "content_hash": h, "canonical": canonical_name}
 
@@ -262,6 +295,8 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
     tmp.rename(sdir)  # single atomic move into place
     note = f" | new-lineage split from {ref_match} (forced)" if ref_match else ""
     _append_log(root, when, f"capture | created | {id} ({tier}){note}")
+    if idx is not None:                        # write-through (T-116); best-effort
+        snapshot.note_capture(root, idx, content_hash=h, ref=ref, id=id)
     res = {"id": id, "action": "created", "version": 1, "path": str(sdir),
            "content_hash": h, "canonical": canonical_name}
     if ref_match:

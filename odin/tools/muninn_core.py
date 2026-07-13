@@ -88,6 +88,7 @@ from muninn.projections import (  # noqa: E402,F401
     connector_projection,
 )
 from muninn.decisions import (  # noqa: E402,F401
+    record_lint_entry,
     _AS_OF_WINDOW_DAYS,
     _days_old,
     _captures_since_last_lint,
