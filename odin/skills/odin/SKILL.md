@@ -154,7 +154,20 @@ just deferred to the moment you learn the connector exists.
      HTML is unusable: a bot-blocked page, a JS-rendered SPA whose static HTML is mostly
      chrome, or a non-HTML endpoint. The rendering is a re-fetchable snapshot, never the
      durable original; `model-read` is its honest assurance (mirrors the opaque-source
-     rule under Derive).
+     rule under Derive). **The same raw-first rule holds for ANY connector item**
+     (a work item, a ticket, a thread, a cloud doc): the **raw tool response is the
+     capturable artifact**; persist it verbatim (`--source-file item.json`, or the
+     body as the unmodified payload text), never your own prose retelling of it.
+     A rendering may stand in as the source body **only when no raw representation
+     is available**, and then it is **voiced and carries all four honesty stamps,
+     never silent**: say in chat that a rendering (not the source data) is being
+     captured, then stamp (1) `--tier reference --reason <why>` (the live item stays
+     authoritative; a rendering is never `capture: full`), (2) `--recoverable` with
+     the real locator, (3) `--captured-by huginn/<model>@<version>` (ADR-0001:
+     disclose the producer of the bytes), and (4) `--derivation model-read` on every
+     doc derived from it. Artifacts the item links (an attachment, a supporting
+     document) are **their own capture candidates: surface them, never silently
+     drop them** (T-131).
    Report the dedup/version outcome the Core returns. If capture is **refused**
    because the `origin.ref` already belongs to another source (changed content at
    a known locator under a new id — a lineage split), re-capture under the id the
@@ -484,7 +497,16 @@ While reasoning you will make **grounded new inferences** the base doesn't yet h
 — computing an age from a date of birth, spotting a consequence two sources imply.
 That understanding is worth keeping, but **do not author it into the base as a side
 effect of `ask`** (consent-of-surprise; base bloat). And do **not** stop to ask
-"save this?" per inference (a capable model augments constantly — that nags). Instead:
+"save this?" per inference (a capable model augments constantly — that nags).
+
+**Channel boundary (T-129/T-131): this pile holds inferences over sources already
+in the base — nothing else.** Never stage `explore` findings (outward findings
+live in chat or `inbox/` and enter memory only through `ingest`, which fetches
+full bits), and never stage a source's **summary** (a summary is mandatory at
+capture — L15, an error — and is derived in the Ingest flow, not parked for
+optional review). At **promote**, re-read the cited source bytes (never trust
+the staged text) and set the rung against what the source *is*: a body that is
+a model rendering grounds `model-read`, never `extracted` (T-069). Instead:
 
 1. **Stage it.** `stage-candidate cand-<slug> --title "…" [--abstract "…"]
    --source <src-…> [--source …]` with the grounded inference as the body, cited to
@@ -722,24 +744,38 @@ is cheap and reversible *because* it commits nothing.
      --origin-ref <ref>` (locator match). You **may** additionally *propose* a
      fuzzy near-dup by content similarity — always **flagged as a guess, never a
      silent merge** (T-045 ladder).
-5. **Stage & present — transient.** A fetchable candidate is shown by what it is +
-   its dedup status; a **reference-tier candidate** (no bytes) is shown as a
-   **preview summary you author** — what it is, what it covers, its `origin.ref`.
-   That preview is **yours (Huginn's), not a durable `summary` doc** — it never
-   enters `summaries/`.
-6. **Report — chat or park.** Either **present the findings in chat**, or — on a
-   **one-time explicit opt-in** ("stage these for later") — **park** them in the
-   Muninn's `inbox/` for async review. `inbox/` is pre-capture staging, **not**
-   memory (ADR-0006), so parking there is *not* a write to the Muninn. Park a
-   fetchable candidate as its bytes; a reference-tier one as your preview note.
-   Never park without the explicit opt-in.
+5. **Assemble the transient preview (write nothing).** A fetchable candidate is
+   shown by what it is + its dedup status; a **reference-tier candidate** (no
+   bytes) is shown as a **preview summary you author** — what it is, what it
+   covers, its `origin.ref`. That preview is **yours (Huginn's), not a durable
+   `summary` doc** — it never enters `summaries/`, and it is routing information
+   for the user's decision, never a capturable artifact. (This step is not
+   "staging": staging is the candidates verb, and explore findings never go
+   there.)
+6. **Report — chat or park, and say which.** Either **present the findings in
+   chat**, or — on a **one-time explicit opt-in** ("park these for later") —
+   **park** them in the Muninn's `inbox/` for async review. `inbox/` is
+   pre-capture staging, **not** memory (ADR-0006), so parking there is *not* a
+   write to the Muninn. Park a fetchable candidate as its bytes; a
+   reference-tier one as your preview note. Never park without the explicit
+   opt-in. **When reporting in chat, state the disposition and name the
+   options**: these findings are transient and nothing has been written; the
+   user can say "park these" to hold them in `inbox/`, or pick items to ingest
+   now (each fetched in full from its source). Never say you "staged" what you
+   only presented: staging is the candidates verb (and explore findings never
+   go there), parking is `inbox/`, and a chat report is neither (T-129).
 7. **Offer to `ingest`.** The terminal act. On the user's selection, hand those
-   findings to the **Ingest** flow above in connector mode — which **re-fetches and
-   re-derives** from the real source (the durable summary is minted at ingest); your
-   explore-time preview is **never promoted verbatim** (derivation honesty,
-   ADR-0015). Declined findings leave no trace.
+   findings to the **Ingest** flow above in connector mode — which **re-fetches
+   and re-derives from the real source: the complete source data, full bits**
+   (the raw item/page/file per the connector rule in Ingest step 2, with its
+   linked artifacts surfaced as their own candidates); the durable summary is
+   minted at ingest. Your explore-time preview is **routing information only:
+   never promoted verbatim, and never captured as the source** (derivation
+   honesty, ADR-0015; fidelity, T-131). Declined findings leave no trace.
 
-**Never:** write to the durable Muninn during an explore; compute or assert a hash;
+**Never:** write to the durable Muninn during an explore; capture anything as a
+source mid-explore (ingest is the only path in, and it fetches full bits — never
+your preview prose); compute or assert a hash;
 promote a preview summary into memory unverified; park to `inbox/` without an
 explicit opt-in. **Writes:** nothing durable — only, on the opt-in, transient
 `inbox/` staging. Memory changes only when a separate `ingest` is requested.

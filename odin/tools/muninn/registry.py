@@ -49,6 +49,8 @@ def _op_capture(root, p):
     origin = {"system": p["origin_system"], "ref": p["origin_ref"]}
     if p.get("recoverable") is not None:
         origin["recoverable"] = p["recoverable"]
+    if p.get("captured_by"):
+        origin["captured_by"] = p["captured_by"]
     when = util._now()
     if p.get("source_file"):
         src = Path(p["source_file"])
@@ -203,6 +205,11 @@ OPS = {
             "recoverable": {"type": "boolean", "cli": {"tristate": True},
                             "description": "Is the original re-fetchable via origin.ref? "
                                            "(self-heal, T-066)."},
+            "captured_by": {"type": "string",
+                            "description": "Producer of this record, <faculty>/<tool>@<version> "
+                                           "(ADR-0001). Mandatory disclosure when the body is a "
+                                           "model rendering rather than the source's own data "
+                                           "(T-131)."},
             "force_new": {"type": "boolean",
                           "description": "Deliberately start a NEW lineage although origin_ref "
                                          "matches an existing source (the split is logged; T-045)."},
