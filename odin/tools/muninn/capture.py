@@ -457,3 +457,45 @@ def source_status(root, id):
         "origin_ref": origin.get("ref"),
         "origin_system": origin.get("system"),
     }
+
+
+@_locked
+def retier(root, id, tier, *, reason=None):
+    """Deliberately correct a source's **capture tier** (T-134) — the consented
+    repair for a misjudged tier, which previously had no path at all (an
+    identical-byte re-capture dedups to a no-op; a meta.yml hand-edit is the
+    forbidden out-of-band write).
+
+    The tier describes **what the base holds** (ADR-0003): `full` when the
+    complete artifact bytes are the canonical record; `reference` when only a
+    locator and at most a stand-in are held (and then `capture_reason` is
+    required — the schema's IFF). This op changes ONLY `capture` /
+    `capture_reason`; bytes, content_hash, version, and history are untouched,
+    so every derived doc's provenance still verifies unchanged.
+
+    Returns ``{"id", "tier", "previous_tier", "capture_reason", "changed"}``.
+    """
+    if tier not in ("full", "reference"):
+        raise ValueError(f"tier must be 'full' or 'reference', got {tier!r}")
+    root = Path(root)
+    meta_p = root / "sources" / id / "meta.yml"
+    if not meta_p.exists():
+        raise ValueError(f"no such source: {id}")
+    meta = _load_yaml(meta_p)
+    prev = meta.get("capture", "full")
+    if tier == "reference" and not (reason or "").strip():
+        raise ValueError("a reference-tier source requires a capture_reason "
+                         "(ADR-0003: required IFF capture: reference)")
+    if prev == tier and (tier == "full" or meta.get("capture_reason") == reason):
+        return {"id": id, "tier": tier, "previous_tier": prev,
+                "capture_reason": meta.get("capture_reason"), "changed": False}
+    meta["capture"] = tier
+    meta["capture_reason"] = reason if tier == "reference" else None
+    tmp = meta_p.with_name(".meta.yml.tmp")
+    tmp.write_text(_dump_yaml(meta), encoding="utf-8")
+    tmp.replace(meta_p)
+    _append_log(root, util._now(),
+                f"retier {id}: {prev} -> {tier}"
+                + (f" ({reason})" if tier == "reference" else ""))
+    return {"id": id, "tier": tier, "previous_tier": prev,
+            "capture_reason": meta.get("capture_reason"), "changed": True}

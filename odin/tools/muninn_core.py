@@ -49,6 +49,7 @@ from muninn.capture import (  # noqa: E402,F401
     _capture,
     capture_repo,
     dedup_check,
+    retier,
     source_status,
 )
 from muninn.derive import (  # noqa: E402,F401

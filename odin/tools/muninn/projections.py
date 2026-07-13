@@ -423,7 +423,7 @@ def resolve_scope(root, project=None):
 _LOCAL_ORIGINS = {"file", "chat"}
 
 
-def connector_projection(root):
+def connector_projection(root, project=None):
     """Project the distinct connectors the **resource-landscape layer** references
     (ADR-0021 §2, ADR-0028) — a deterministic, faithful view (no inference, no registry):
     the computed *skeleton* to the landscape docs' authored *flesh*. Over every
@@ -434,6 +434,11 @@ def connector_projection(root):
           free); local origins (`file`, `chat`) are not connectors and are skipped.
       (b) an explicit `connectors: [{system, ref}]` field on **derived** members — for a
           connector a landscape doc *asserts* but hasn't ingested from ("contracts in Drive").
+
+    With `project`, the roster is that project's members UNIONED with the global
+    layer (T-128) — "the connectors your world touches" resolved the way queries
+    are (`resolve_scope`: project ∪ always-in-scope global). Global-only stays
+    the no-arg default; a project-scoped assertion never leaks into it.
 
     Returns `[{system, ref, referenced_by: [ids]}]`, sorted. Like `index.md`, it is a pure
     projection of frontmatter — it goes stale like any projection, never a durable registry."""
@@ -449,6 +454,13 @@ def connector_projection(root):
             for m in (d.data.get("members") or []):
                 if m not in members:
                     members.append(m)
+    if project is not None:
+        pdoc = by_id.get(project)
+        if pdoc is None or pdoc.kind != "project":
+            raise ValueError(f"no such project: {project}")
+        for m in (pdoc.data.get("members") or []):
+            if m not in members:
+                members.append(m)
 
     conns: dict = defaultdict(set)
     for mid in members:

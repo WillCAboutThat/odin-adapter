@@ -116,13 +116,29 @@ landscape map at once**, then let the user confirm in one pass:
 **cannot enumerate every connector**: MCP tools self-describe, but a **host CLI** (`gh`,
 `aws`, `kubectl`, `psql`), a plain HTTP API you call, or a connector added later does **not**
 — you only learn you have it by *using* it. So don't lean on setup alone. **Whenever you
-reach a connector during a task that isn't in the landscape** (check `… connectors <root>`),
+reach a connector during a task that isn't in the landscape** (check `… connectors <root>`,
+adding `--project <id>` when working inside a project, T-128),
 and it's a **durable resource** worth mapping (a code host, an issue tracker, a cloud
 account — not a one-off `curl`), **notice it and offer to record it**: *"I used `gh` to reach
 GitHub, which isn't in your landscape — want me to add it?"* Judge durability; **offer, get
 approval, never a silent write**. This is how the map catches what the survey structurally
 can't — the same reasoning the survey uses (a self-description you *observed by using it*),
 just deferred to the moment you learn the connector exists.
+
+**Recording the landscape means authoring domain knowledge, never snapshotting your
+tool list (T-127).** When the user asks to durably record explored or available
+connectors, author (or extend) **landscape docs** stating what each system *holds for
+this org* ("work items live in ClickUp"; "the Data Team's ADRs live in ADO"), one
+entry per system where granular staleness matters, each asserting via `--connector` —
+never a roster of "connectors currently active/callable." Reachability is per-machine,
+per-session, OAuth-state-dependent **survey output that evaporates by design**
+(ADR-0021 §1); a durable snapshot of it reads as standing fact on any other machine or
+day. If the user insists on keeping a reachability observation, keep it honestly: a
+**dated point-in-time observation** ("observed callable on <date> from
+<environment>", never "active"), captured with **`--captured-by
+<faculty>/<model>@<version>`** — it is an **Odin-authored record with no external
+referent**, legitimate the way a person's meeting note is, but the authorship
+disclosure is mandatory and everything derived from it stamps `model-read`.
 
 ## Ingest (the flagship): remember a document
 
@@ -140,9 +156,21 @@ just deferred to the moment you learn the connector exists.
      --origin-system chat --origin-ref <where>` (canonical `source.md`).
    - **A URL / connector source** (e.g. an `explore` finding, a live web page):
      always add `--origin-system url --origin-ref <URL>` + **`--recoverable`** so
-     `regenerate` can re-`fetch` it later (T-066 self-heal), and **`--tier reference`**
-     when the **authoritative copy is the live URL**, not your snapshot (*reference is
-     about **authority, not storage***). **For an HTML page, prefer the raw bytes:**
+     `regenerate` can re-`fetch` it later (T-066 self-heal). **The tier describes
+     what the base HOLDS (ADR-0003), never who owns the truth (T-134):** complete
+     artifact bytes held verbatim (a file, a raw payload, a full export) =
+     **`full`**, even when the upstream record is live and evolving; liveness is
+     already carried by `origin.ref` + `--recoverable`, and upstream change makes
+     a new *version*, never a tier downgrade (the README's updated-lease case).
+     **`--tier reference` (+ `--reason`)** only when the bytes are NOT held or the
+     held text is a lossy stand-in: the model-rendering fallback below, an
+     excerpt, a licensed/too-large/private artifact. (The gloss *"reference is
+     about authority, not storage"* is scoped to **stand-ins**: a rendering whose
+     authoritative copy is the live URL. It is never a reason to mark a held raw
+     payload `reference`; under that reading every connector source would be
+     reference and the L10 assurance signal would drown.) A misjudged tier is
+     corrected with the deliberate **`retier`** op, never a hand-edit of
+     `meta.yml`. **For an HTML page, prefer the raw bytes:**
      fetch the page **decompressed** (e.g. `curl -L --compressed`, or your fetch tool's
      raw-HTML mode — a gzip'd body decoded as text is garbage) and capture it with
      **`--source-file page.html`**, so the Core's html extractor writes a faithful
@@ -297,6 +325,18 @@ not its implementation.
    (re-architecture, repurpose, split/merge, ownership) and **stays fresh under implementation
    churn**. On amendment, re-`capture-repo` (a new version) → the mental model is flagged stale
    (L4) → heal it with `regenerate`.
+
+**Generated agent-wiki layers (`openwiki/` and kin, T-133).** A repo's machine-generated
+wiki is fair **transient routing input** — a free map of a big repo the survey may read
+before you capture the constitution properly. But it is **never a constitution surface**
+(generated text churns; the constitution's value is staying flat under churn) and **never
+grounds the mental model**: it is ungrounded generated prose, and grounding in it is
+summarizing summaries one level removed. Capture wiki pages as sources only when the wiki
+itself is the object of memory, framed honestly as machine-generated secondary material
+(low assurance; L10 territory) — there the base's staleness flags give the
+silently-regenerated wiki the audit trail it lacks. Some generators write a pointer into
+`AGENTS.md`, which *is* a constitution surface: a one-time pointer is a legitimate
+amendment and its stale flag is **correct** — voice it, never suppress it.
 
 ## Invariants — never violate (the Core/linter enforce them)
 
@@ -721,8 +761,14 @@ is cheap and reversible *because* it commits nothing.
    **mental model** = what that codebase is *for*). These are ordinary grounded facts,
    **never connector infrastructure**, so **read** them to route — run `… connectors <root>`
    for the computed **roster** of connectors your world touches (origin-union + asserted;
-   T-070). When the layer is thin, *offer to build it*: a repo mental model, or a landscape
-   note that **asserts** a connector via `… derive … --connector <system>=<ref>`. The
+   T-070), and **working within a project, `… connectors <root> --project <id>`** for the
+   project ∪ global roster (T-128; a project-scoped assertion is invisible to the global
+   list by design). When the layer is thin, *offer to build it*: a repo mental model, or a
+   landscape note that **asserts** a connector via `… derive … --connector <system>=<ref>` —
+   and **ask the scoping question at registration**: an org-wide fact ("contracts live in
+   Drive") is asserted on a **global** landscape doc; a fact specific to one project ("the
+   GDPR project's tickets live in this ClickUp list") is asserted on a doc that is a
+   **member of that project**, where the scoped roster carries it. The
    survey is a **transient reasoning act,
    not a stored registry** (survey ≠ registry — same content, opposite
    ownership/lifetime). It also **pre-flights the candidate set** — reachability,

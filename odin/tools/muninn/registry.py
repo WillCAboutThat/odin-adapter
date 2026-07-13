@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from . import util  # noqa: E402  (module-attr access = the patch point)
 from .candidates import decline_candidate, list_candidates, promote_candidate, stage_candidate  # noqa: E402
-from .capture import capture, capture_file, capture_repo, dedup_check, source_status  # noqa: E402
+from .capture import capture, capture_file, capture_repo, dedup_check, retier, source_status  # noqa: E402
 from .decisions import lint_report, record_decision, status  # noqa: E402
 from .derive import relink, stamp_derived, write_derived  # noqa: E402
 from .projections import connector_projection, find, fingerprint, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
@@ -249,6 +249,32 @@ OPS = {
                    "id": {"type": "string", "description": "The source id.",
                           "required": True, "cli": {"positional": True}}},
         "handler": lambda root, p: source_status(root, p["id"]),
+    },
+    "retier": {
+        "help": "deliberately correct a source's capture tier (full|reference) — "
+                "the consented repair for a misjudged tier (T-134)",
+        "description": "Correct a source's capture tier. The tier describes what "
+                       "the base HOLDS (ADR-0003): full = the complete artifact "
+                       "bytes are the canonical record (even when the upstream "
+                       "record is live — evolution is versioning's job); "
+                       "reference = only a locator and at most a stand-in are "
+                       "held (requires reason). Changes ONLY capture/"
+                       "capture_reason; bytes, hash, and history untouched, so "
+                       "all provenance still verifies. Logged. Never hand-edit "
+                       "meta.yml.",
+        "params": {
+            "root": _ROOT_P,
+            "id": {"type": "string", "description": "The source id.",
+                   "required": True, "cli": {"positional": True}},
+            "tier": {"type": "string", "enum": ["full", "reference"],
+                     "required": True,
+                     "description": "The corrected tier."},
+            "reason": {"type": "string",
+                       "description": "capture_reason — required when tier is "
+                                      "reference (ADR-0003 IFF)."},
+        },
+        "handler": lambda root, p: retier(root, p["id"], p["tier"],
+                                          reason=p.get("reason")),
     },
     "derive": {
         "help": "write a derived doc (body from --file or stdin)",
@@ -508,14 +534,24 @@ OPS = {
     },
     "connectors": {
         "help": "project the distinct connectors the scope:global landscape "
-                "references (ADR-0021 §2 / T-070)",
+                "references (ADR-0021 §2 / T-070); --project unions a "
+                "project's own references in (T-128)",
         "description": "Project the distinct connectors the scope:global "
                        "landscape references (origin-union + explicit "
                        "`connectors:` fields; ADR-0021 §2 / T-070) — the "
                        "deterministic read `explore` consults to know which "
-                       "systems this base's world touches.",
-        "params": {"root": _ROOT_P},
-        "handler": lambda root, p: connector_projection(root),
+                       "systems this base's world touches. With `project`, "
+                       "the roster is that project's members unioned with the "
+                       "global layer (T-128), matching resolve_scope's "
+                       "project-plus-global reading; global-only stays the "
+                       "default.",
+        "params": {"root": _ROOT_P,
+                   "project": {"type": "string",
+                               "description": "Project id whose members to union "
+                                              "with the global roster (the "
+                                              "working-inside-a-project view)."}},
+        "handler": lambda root, p: connector_projection(root,
+                                                        project=p.get("project")),
         "presenter": _show_connectors,
     },
     "usage": {
