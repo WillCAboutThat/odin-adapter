@@ -197,12 +197,29 @@ flowchart LR
     Stale --> Fix(["You choose: regenerate"])
 ```
 
-Phrases worth knowing (all plain language; these are the verbs underneath):
-**"remember this"** (ingest) · **"what do we know about…?"** (ask) ·
-**"find the lease"** (find: deterministic, works with no AI at all) ·
-**"what connects across our sources?"** (synthesize) · **"go look at that
-folder/repo and report"** (explore: reports transiently, nothing enters the
-base without a consented ingest) · **"is our memory healthy?"** (lint).
+### The verbs, in plain language
+
+There are no commands to learn; you talk, and these are the verbs underneath:
+
+| Say | Verb | What happens |
+|---|---|---|
+| *"remember this"* | `ingest` | An immutable copy with origin + content hash is captured, a cited summary derived, both indexed. Pastes, files, connector items (fetched in full), and a self-clearing `inbox/` batch. |
+| *"what do we know about X?"* | `ask` | An answer with citations and stated assurance. "The base doesn't know" beats a guess. |
+| *"go look at that repo/drive/system and report"* | `explore` | Transient outward discovery; nothing enters memory without a consented ingest. |
+| *"find the lease"* | `find` | Deterministic text search; works with no AI at all, forever. |
+| *"search for anything about onboarding"* | `search` | Semantic lookup over a disposable index; proposes candidates, never grounds. |
+| *(the default lookup)* | `retrieve` | `search` and `find` together, with a mechanical fallback. |
+| *"why did we choose X?"* | `why` | The recorded decision and its rationale, cited. |
+| *"record a decision: we're going with Y"* | `record a decision` | Your call, authored onto the record (yours, not derived). |
+| *"what connects across our sources?"* | `synthesize` | Proposed cross-source insights, grounded and cited, written only on your nod. |
+| *"challenge our conclusions"* | `review` | An adversarial re-check of derived docs against the source bytes; read-only, advisory. |
+| *"review the pending pile"* | `review-candidates` | Batch-admit or decline the inferences Odin staged while reasoning; declines are remembered, never re-nagged. |
+| *"is our memory current with the world?"* | `drift-check` | Re-fetch connector sources on your word, compare deterministically, flag what changed; staleness cascades to everything that rested on it. |
+| *"is our memory healthy?"* | `lint` | The structural check that defines done: provenance present, no summary chaining, staleness flagged, every source summarized. |
+
+Maintenance verbs exist too (`init`, `status`, `regenerate`, `reindex`,
+`retier`); Odin reaches for them when the moment calls, always visibly, and
+the full contract ships in the bundle (`odin/docs/odin/SKILLS.md`).
 
 And everything above lands as plain Markdown + links in a folder you own:
 readable in any editor, browsable in Obsidian, verifiable years from now with
