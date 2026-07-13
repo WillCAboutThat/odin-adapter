@@ -104,11 +104,13 @@ def build_parser():
 
 
 def _main(argv=None):
-    # Help text and `find`/`resolve` output carry non-ASCII (—, ·, ∪). On a
-    # Windows console defaulted to cp1252, argparse/print raise UnicodeEncodeError
-    # mid-write; force UTF-8 so the CLI is codepage-independent (no-op where the
-    # stream is already UTF-8 or can't be reconfigured, e.g. a captured buffer).
-    for _stream in (sys.stdout, sys.stderr):
+    # Help text and `find`/`resolve` output carry non-ASCII (—, ·, ∪), and stdin
+    # bodies arrive as UTF-8 bytes. On a Windows console defaulted to cp1252,
+    # argparse/print raise UnicodeEncodeError mid-write and `_read_body` mojibakes
+    # inbound text (T-130); force UTF-8 in both directions so the CLI is
+    # codepage-independent (no-op where a stream is already UTF-8 or can't be
+    # reconfigured, e.g. a captured buffer).
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
         try:
             _stream.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError):

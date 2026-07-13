@@ -211,9 +211,13 @@ def serve(stdin=None, stdout=None):
     JSON message per line, writes one response per line."""
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
-    for stream in (stdout, sys.stderr):
+    # UTF-8 both directions, codepage-independent (see CLI). stdin included:
+    # the client sends raw UTF-8 JSON-RPC, and a Windows locale (cp1252) stdin
+    # would mojibake every non-ASCII character in tool arguments before the
+    # Core faithfully stores the garbage (T-130).
+    for stream in (stdin, stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8")  # codepage-independent (see CLI)
+            stream.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError):
             pass
 

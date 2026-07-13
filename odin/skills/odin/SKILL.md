@@ -168,7 +168,12 @@ just deferred to the moment you learn the connector exists.
    one-line `abstract`, and a body that **cites the source** inline as a
    **linked citation** (ADR-0038) — the id as label, the source's readable file
    as target: `… [src-<slug>](../sources/src-<slug>/source-text.md)` (or the
-   canonical `source.md` for a text-native capture). How you *read* the source,
+   canonical `source.md` for a text-native capture). **Authoring style, for
+   everything you write into the base** (titles, abstracts, bodies — every verb,
+   not just ingest): plain portable Markdown, and **no em-dashes**; use commas,
+   colons, or parentheses instead. The base is read in ordinary editors (VS Code,
+   Obsidian) whose Markdown views render them poorly, and it must read cleanly
+   everywhere. How you *read* the source,
    and how you stamp the summary's
    `derivation`, depends on what the Core could extract (ADR-0011):
    - **Text-native or extractable** (`.md`, `.txt`, a PDF/.docx the registry read):
