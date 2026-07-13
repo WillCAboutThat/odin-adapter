@@ -2,6 +2,8 @@
 
 Split from muninn_core.py (T-122); muninn_core remains the facade.
 """
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +46,87 @@ def stamp_derived(root):
             tmp.replace(md)
             stamped += 1
     return {"stamped": stamped, "skipped": skipped}
+
+
+def _link_target(root, doc_id):
+    """The readable file a citation of `doc_id` should link to, or None. A source
+    links to its text aid (else its canonical file); any other doc links to its
+    own `.md`. Mirrors the read path a human or AI actually follows."""
+    root = Path(root)
+    sdir = root / "sources" / doc_id
+    if sdir.is_dir():
+        aid = sdir / "source-text.md"
+        if aid.exists():
+            return aid
+        cands = [p for p in sorted(sdir.glob("source.*"))
+                 if p.is_file() and not p.name.startswith("source.v")]
+        return cands[0] if cands else None
+    for dirname in (*muninn_lint.DERIVED_DIRS, "decisions", "projects"):
+        p = root / dirname / f"{doc_id}.md"
+        if p.exists():
+            return p
+    return None
+
+
+@_locked
+def relink(root):
+    """Upgrade bare `[known-id]` citation spans to linked citations (ADR-0038) —
+    `[src-x]` → `[src-x](relative/path)` — across the authored derived layer
+    (derived docs + decisions; projects are computed and regenerate instead).
+
+    A regenerate-class maintenance repair (I5: deliberate and consented, never
+    automatic): idempotent — an already-linked span (`[id](…)`) is left alone, an
+    unknown id is not a citation and is untouched — and it re-stamps `self_hash`
+    on any derived doc it edits, so an L19-enforcing base stays clean (this is a
+    sanctioned Core edit, not an out-of-band one). Body bytes change → the content
+    fingerprint moves → the base reads `drifted` until the next lint; that is
+    correct surfacing. Returns {relinked, spans, unchanged}."""
+    root = Path(root)
+    ids = {}
+    for sdir in sorted((root / "sources").glob("*")) if (root / "sources").is_dir() else []:
+        if sdir.is_dir():
+            ids[sdir.name] = _link_target(root, sdir.name)
+    for dirname in (*muninn_lint.DERIVED_DIRS, "decisions", "projects"):
+        d = root / dirname
+        if d.is_dir():
+            for md in d.glob("*.md"):
+                ids[md.stem] = md
+    known = {i: t for i, t in ids.items() if t is not None}
+    if not known:
+        return {"relinked": 0, "spans": 0, "unchanged": 0}
+    span_re = re.compile(r"\[(" + "|".join(re.escape(i) for i in sorted(known, key=len,
+                                                                        reverse=True))
+                         + r")\](?!\()")
+    relinked = spans = unchanged = 0
+    for dirname in (*muninn_lint.DERIVED_DIRS, "decisions"):
+        d = root / dirname
+        if not d.is_dir():
+            continue
+        for md in sorted(d.glob("*.md")):
+            text = md.read_text(encoding="utf-8")
+            fm, body = muninn_lint.split_frontmatter(text)
+            if fm is None or not body:
+                unchanged += 1
+                continue
+
+            def _sub(m):
+                rel = os.path.relpath(known[m.group(1)], start=md.parent)
+                return f"[{m.group(1)}]({rel.replace(os.sep, '/')})"
+
+            new_body, n = span_re.subn(_sub, body)
+            if n == 0:
+                unchanged += 1
+                continue
+            if "self_hash" in fm:  # keep L19 truthful about this sanctioned edit
+                fm["self_hash"] = muninn_lint.derived_content_hash(
+                    fm.get("title"), fm.get("abstract"), new_body)
+            tmp = md.parent / f".{md.name}.tmp"
+            tmp.write_text("---\n" + _dump_yaml(fm) + "---\n" + new_body,
+                           encoding="utf-8")
+            tmp.replace(md)
+            relinked += 1
+            spans += n
+    return {"relinked": relinked, "spans": spans, "unchanged": unchanged}
 
 
 @_locked

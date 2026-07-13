@@ -37,7 +37,9 @@ from muninn.util import (  # noqa: E402,F401
 from muninn.usage import (  # noqa: E402,F401
     _source_bytes,
     log_usage,
+    read_usage_records,
     usage_report,
+    usage_html,
     _scope_bytes,
     usage_log,
 )
@@ -50,6 +52,7 @@ from muninn.capture import (  # noqa: E402,F401
     source_status,
 )
 from muninn.derive import (  # noqa: E402,F401
+    relink,
     _TYPE_DIR,
     stamp_derived,
     write_derived,
@@ -114,6 +117,7 @@ from muninn.registry import (  # noqa: E402,F401
     _parse_connector,
     _parse_surface,
     OPS,
+    UNTIMED_VERBS,
     mcp_tools,
     run_op,
 )

@@ -793,7 +793,12 @@ one-step path to conformance, not a dead end.
 
 ## 9. Open questions (for follow-up ADRs)
 
-- Span citation format: freeform vs. structured line/char ranges vs. anchors.
+- ~~Span citation format~~ — **resolved (ADR-0038):** freeform **linked
+  citations** — the stable id (optionally plus a span note) as the Markdown
+  link label, the cited doc's readable file as the target. Convention, not
+  format: no lint rule parses spans, and bare `[src-…]` spans remain valid
+  (the `relink` maintenance op upgrades them). Structured ranges/anchors stay
+  future work if a measured need appears.
 - Whether entity/concept pages need a typed relationship graph beyond
   `see_also`.
 - ~~Multi-source derivation~~ — **resolved (ADR-0009):** the `sources[]` list is an

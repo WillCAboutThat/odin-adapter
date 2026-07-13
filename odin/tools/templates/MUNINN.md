@@ -109,7 +109,13 @@ unreviewed.
 
 Two guarantees to honor every time: **capture is visible** (say what you stored
 and where), and **answers are traceable** (cite the source, or say you're
-reasoning beyond it, or say you don't know).
+reasoning beyond it, or say you don't know). When you write a citation **into
+this base**, make it a **linked citation** — the stable id as the label, the
+cited doc's readable file as the target, relative to the citing doc — e.g. from
+a summary, `[src-example](../sources/src-example/source-text.md)` — so the
+provenance edge is a real link every Markdown reader (including a graph view)
+can follow. Bare
+`[src-…]` spans in older docs are still valid; the `relink` op upgrades them.
 
 ## Skimming: `title` + `abstract`
 

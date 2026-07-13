@@ -165,8 +165,11 @@ just deferred to the moment you learn the connector exists.
 3. **Derive** (your judgment). Read the source and write grounded docs: a
    **summary** (always — see below), plus **entities / concepts / questions /
    insights** where the material clearly warrants. For each: a short `title`, a
-   one-line `abstract`, and a body that **cites the source** inline
-   (`… [src-<slug>]`). How you *read* the source, and how you stamp the summary's
+   one-line `abstract`, and a body that **cites the source** inline as a
+   **linked citation** (ADR-0038) — the id as label, the source's readable file
+   as target: `… [src-<slug>](../sources/src-<slug>/source-text.md)` (or the
+   canonical `source.md` for a text-native capture). How you *read* the source,
+   and how you stamp the summary's
    `derivation`, depends on what the Core could extract (ADR-0011):
    - **Text-native or extractable** (`.md`, `.txt`, a PDF/.docx the registry read):
      read the `source-text.md` aid — the bytes stay authoritative. The summary's
@@ -402,7 +405,8 @@ own knowledge** (SPEC §5.5, ADR-0019), so record one **only on an explicit requ
 of `ask`/`synthesize`. Odin is the scribe, not the author.
 
 1. **Author the ADR-shaped body** — Context · Decision · Consequences — in the
-   owner's terms. Cite informing sources inline `[src-…]`.
+   owner's terms. Cite informing sources inline as linked citations
+   `[src-…](../sources/src-…/source-text.md)` (ADR-0038).
 2. **Write it through the Core** (the Core owns the write; you never hand-edit):
    `python <ODIN>/tools/muninn_core.py record-decision <root> dec-<slug>
    --title "<t>" --status accepted [--evidence src-A --evidence src-B] --file <body>`
@@ -425,7 +429,8 @@ of `ask`/`synthesize`. Odin is the scribe, not the author.
    sources** and reason over them. Retrieval here is you reading the base, not a
    single matcher call.
 2. **Answer, cited to sources** — every asserted fact carries its source, e.g.
-   "… net 30 [src-vendor-contract]."
+   "… net 30 [src-vendor-contract]." (In chat the bare id label is fine; anything
+   *written into the base* uses linked citations per ADR-0038.)
    - **Model-knowledge — quarantine, don't smuggle (ADR-0011 bright line).** When a
      question invites knowledge the base doesn't hold (e.g. "what's typical for a
      dog *like* this?"), the default is **quarantine, not refusal**: answer the

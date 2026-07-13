@@ -3,6 +3,7 @@
 Split from muninn_core.py (T-122); muninn_core remains the facade.
 """
 import sys
+import time
 from pathlib import Path
 
 
@@ -11,10 +12,10 @@ from . import util  # noqa: E402  (module-attr access = the patch point)
 from .candidates import decline_candidate, list_candidates, promote_candidate, stage_candidate  # noqa: E402
 from .capture import capture, capture_file, capture_repo, dedup_check, source_status  # noqa: E402
 from .decisions import lint_report, record_decision, status  # noqa: E402
-from .derive import stamp_derived, write_derived  # noqa: E402
+from .derive import relink, stamp_derived, write_derived  # noqa: E402
 from .projections import connector_projection, find, fingerprint, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
 from .scaffold import init  # noqa: E402
-from .usage import _source_bytes, log_usage, usage_log, usage_report  # noqa: E402
+from .usage import _source_bytes, log_usage, usage_html, usage_log, usage_report  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -63,7 +64,7 @@ def _op_capture(root, p):
                    when=when, force_new=bool(p.get("force_new")))
 
 
-def _usage_capture(root, p, res):
+def _usage_capture(root, p, res, duration_ms=None):
     body = p.get("body")
     if body is not None:
         n = len(body.encode("utf-8"))
@@ -71,14 +72,27 @@ def _usage_capture(root, p, res):
         n = Path(p["source_file"]).stat().st_size
     else:
         n = 0
-    log_usage(root, "capture", bytes_out=n, id=p.get("id"), action=res.get("action"))
+    log_usage(root, "capture", bytes_out=n, id=p.get("id"), action=res.get("action"),
+              **({"duration_ms": duration_ms} if duration_ms is not None else {}))
 
 
-def _usage_derive(root, p, res):
+def _usage_derive(root, p, res, duration_ms=None):
     log_usage(root, "derive",
               bytes_in=sum(_source_bytes(root, s) for s in (p.get("sources") or [])),
               bytes_out=len((p.get("body") or "").encode("utf-8")),
-              id=p.get("id"), type=p.get("type", "summary"))
+              id=p.get("id"), type=p.get("type", "summary"),
+              **({"duration_ms": duration_ms} if duration_ms is not None else {}))
+
+
+def _op_usage(root, p):
+    """The usage report; with the CLI-only `--html`, also write the self-contained
+    HTML view of the ledger (T-123) and echo where it landed."""
+    rep = usage_report(root)
+    if p.get("html"):
+        out = Path(p["html"])
+        out.write_text(usage_html(root), encoding="utf-8")
+        rep["html_report"] = str(out)
+    return rep
 
 
 def _show_list_candidates(rep):
@@ -434,6 +448,20 @@ OPS = {
         "params": {"root": _ROOT_P},
         "handler": lambda root, p: reproject(root),
     },
+    "relink": {
+        "help": "upgrade bare [id] citation spans to linked citations "
+                "[id](path) across derived docs + decisions (ADR-0038)",
+        "description": "Regenerate-class maintenance op (ADR-0038): rewrite bare "
+                       "`[known-id]` citation spans in derived docs and decisions "
+                       "into linked citations `[id](relative-path)` — id stays "
+                       "the label, the target is the doc's readable file. "
+                       "Idempotent; already-linked spans and unknown ids are "
+                       "untouched; `self_hash` is re-stamped on edited docs so "
+                       "L19 stays clean. Run once to upgrade a base that predates "
+                       "linked citations; the fingerprint moves (lint after).",
+        "params": {"root": _ROOT_P},
+        "handler": lambda root, p: relink(root),
+    },
     "capture-repo": {
         "help": "capture a repo as a constitution-grounded reference source "
                 "(README/ARCHITECTURE/ADRs/contract/manifests/topology; ADR-0028)",
@@ -486,11 +514,19 @@ OPS = {
     "usage": {
         "help": "report the disposable usage ledger (ADR-0027)",
         "description": "Report the disposable usage ledger (ADR-0027): per-op "
-                       "counts and byte-footprints (plus REAL token counts where "
-                       "a harness exposed them) — the evidence that tunes review "
-                       "cadence (T-088). Operational state, never knowledge.",
-        "params": {"root": _ROOT_P},
-        "handler": lambda root, p: usage_report(root),
+                       "counts, byte-footprints, and wall-time (plus REAL token "
+                       "counts where a harness exposed them) — the evidence that "
+                       "tunes review cadence (T-088) and baselines perf (T-123). "
+                       "Operational state, never knowledge.",
+        "params": {
+            "root": _ROOT_P,
+            # cli_only: a file-writing path never enters the MCP schema (the model
+            # shouldn't aim writes at arbitrary paths); the CLI user already can.
+            "html": {"type": "string", "cli_only": True, "cli": {"flag": "--html"},
+                     "description": "Also render the ledger as one self-contained "
+                                    "HTML page at this path (T-123)."},
+        },
+        "handler": _op_usage,
         "presenter": _show_usage,
     },
     "usage-log": {
@@ -657,15 +693,29 @@ def mcp_tools(ops, prefix="odin_"):
     return tools
 
 
+# Verbs whose ledger entry is never the wrapper's job: reading the ledger must not
+# grow it (observer effect), and `usage-log`'s handler records the ADAPTER's verb
+# itself — a second wrapper record would double-count.
+UNTIMED_VERBS = frozenset({"usage", "usage-log"})
+
+
 def run_op(ops, verb, root, params):
     """Invoke a registry op by CLI verb name — the shared param→Core mapping.
-    Fires the op's best-effort usage hook after a successful call."""
+    Fires the op's best-effort usage hook after a successful call, carrying the
+    handler's wall-time (T-123); unhooked ops get a minimal timed record so the
+    read path (find/status/lint — where T-116 lives) has a perf baseline. Timing
+    is always-on: one clock read on a write that already happens, into the
+    disposable ledger no guarantee rests on."""
     spec = ops[verb]
+    t0 = time.perf_counter()
     res = spec["handler"](root, params)
-    hook = spec.get("usage")
-    if hook is not None:
-        try:
-            hook(root, params, res)
-        except Exception:
-            pass
+    duration_ms = round((time.perf_counter() - t0) * 1000, 3)
+    try:
+        hook = spec.get("usage")
+        if hook is not None:
+            hook(root, params, res, duration_ms=duration_ms)
+        elif verb not in UNTIMED_VERBS:
+            log_usage(root, verb, duration_ms=duration_ms)
+    except Exception:
+        pass
     return res

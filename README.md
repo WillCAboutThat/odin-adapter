@@ -111,6 +111,48 @@ talk: *"odin, set up a knowledge base here and remember this document…"*. Odin
 will confirm **where the base lives**, capture your first source with
 provenance, and the base explains itself from then on (see its `MUNINN.md`).
 
+## Configuration — all optional
+
+**Odin needs no configuration.** Install it and talk; every default works out of
+the box. The knobs below exist only to *tune one optional feature* — semantic
+retrieval, the local-embeddings tier that accelerates search when an
+[Ollama](https://ollama.com) instance is available. Without Ollama, nothing
+breaks: deterministic `find` and every guarantee work with no AI at all.
+
+Set these as environment variables visible to the process that runs your
+assistant (shell profile, or Claude Code's `settings.json` → `"env": { … }`
+block) — both the MCP server and the plugin's session-start hooks inherit them:
+
+| Variable | What it does | Default |
+|---|---|---|
+| `ODIN_OLLAMA_URL` | Where the semantic tier finds Ollama (e.g. a WSL2 → Windows-host URL, or a shared box) | `http://localhost:11434` |
+| `ODIN_EMBED_MODEL` | Embedding model used by `reindex` (each index remembers its own model afterwards) | `nomic-embed-text` |
+| `ODIN_OLLAMA_KEEP_ALIVE` | How long the embed model stays loaded after use, so follow-up queries are instant (Ollama duration, e.g. `10m`, `1h`, `-1` for forever) | unset → Ollama's own default (~5 min); the session-start warm uses `30m` |
+| `ODIN_DEP_DIR` | *Internal:* extra dependency path honored by the MCP server; you should never need it | unset |
+
+One knob lives at a different layer: **per-base derived-doc integrity checking**
+(opt-in in your base's `muninn.yml`: `integrity.derived_self_hash: true`) makes
+`lint` flag derived documents edited outside Odin. It's a property of the
+knowledge base, not this plugin — see the bundled spec
+([`odin/docs/muninn/SPEC.md`](odin/docs/muninn/SPEC.md), rule L19).
+
+## Browsing in Obsidian
+
+A Muninn is a **valid Obsidian vault as-is** — open the base folder as a vault
+and browse: the index, project pages, and (since ADR-0038) every citation are
+ordinary Markdown links, so backlinks, hover previews, and the **graph view of
+your knowledge's provenance** — each derived note visibly linked to the sources
+that ground it — just work. Two settings make it safe:
+
+1. Turn **off** *Options → Files & Links → "Automatically update internal
+   links"* — a rename must never silently rewrite Odin's sources or derived
+   docs behind its back.
+2. Consider the integrity opt-in (`integrity.derived_self_hash: true`, see
+   *Configuration* above) so any accidental out-of-band edit is flagged by the
+   next `lint` instead of slipping in silently.
+
+Posture in one line: **Obsidian reads, Odin writes.**
+
 ## Updating
 
 - **Claude Code:** `/plugin update` (or opt-in auto-update).

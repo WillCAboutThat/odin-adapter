@@ -42,6 +42,7 @@ Run as ``python3 odin_mcp.py`` (stdio). Bundled by the Claude/Codex plugins
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 # Import the Core from THIS directory (the plugin bundles it here — ADR-0022:
@@ -87,9 +88,14 @@ def _mcp_name(verb):
 _DISPATCH = {_mcp_name(v): spec["handler"]
              for ops in (core.OPS, semantic.OPS) for v, spec in ops.items()}
 
-# MCP tool name -> the registry's best-effort usage hook (root, p, res).
+# MCP tool name -> the registry's best-effort usage hook (root, p, res, duration_ms).
 _USAGE_HOOKS = {_mcp_name(v): spec["usage"]
                 for v, spec in core.OPS.items() if spec.get("usage")}
+
+# MCP tool name -> CLI verb, so timing records carry the same op names on both
+# surfaces (T-123) and the report never splits one op into two rows.
+_VERB_BY_TOOL = {_mcp_name(v): v
+                 for ops in (core.OPS, semantic.OPS) for v in ops}
 
 
 def dispatch(op, params):
@@ -107,20 +113,27 @@ def dispatch(op, params):
     return _DISPATCH[op](root, p)
 
 
-def _note_usage(op, params, result=None):
-    """Record the byte-footprint of a write op to the disposable usage ledger
-    (ADR-0027) — the registry's own usage hook, fired the same way the CLI fires
-    it. Best-effort; never affects the result and is kept OUT of `dispatch()` so
+def _note_usage(op, params, result=None, duration_ms=None):
+    """Record the byte-footprint + wall-time of an op to the disposable usage
+    ledger (ADR-0027/T-123) — the registry's own usage hook, fired the same way
+    the CLI fires it; unhooked ops get a minimal timed record under their CLI
+    verb name (the same rule as `run_op`, so the two surfaces aggregate as one).
+    Best-effort; never affects the result and is kept OUT of `dispatch()` so
     that stays pure (the ADR-0022 equality test)."""
-    hook = _USAGE_HOOKS.get(op)
-    if hook is None:
-        return
     try:
         params = dict(params or {})
         root = params.pop("root", None)
         if root is None:
             return
-        hook(root, params, result if isinstance(result, dict) else {})
+        hook = _USAGE_HOOKS.get(op)
+        if hook is not None:
+            hook(root, params, result if isinstance(result, dict) else {},
+                 duration_ms=duration_ms)
+            return
+        verb = _VERB_BY_TOOL.get(op)
+        if verb is None or verb in core.UNTIMED_VERBS or duration_ms is None:
+            return
+        core.log_usage(root, verb, duration_ms=duration_ms)
     except Exception:
         pass
 
@@ -167,6 +180,7 @@ def handle_message(msg):
         arguments = params.get("arguments") or {}
         if name not in _TOOL_NAMES:
             return _error(mid, -32602, f"unknown tool: {name!r}")
+        t0 = time.perf_counter()
         try:
             out = dispatch(name, arguments)
         except Exception as exc:  # invariant rejection / bad args -> tool error,
@@ -176,7 +190,9 @@ def handle_message(msg):
                              "text": f"{type(exc).__name__}: {exc}"}],
                 "isError": True,
             })
-        _note_usage(name, arguments, out)  # disposable usage ledger (ADR-0027); best-effort
+        # disposable usage ledger (ADR-0027); best-effort, timed at the seam (T-123)
+        _note_usage(name, arguments, out,
+                    duration_ms=round((time.perf_counter() - t0) * 1000, 3))
         text = json.dumps(out, ensure_ascii=False, default=str)
         return _result(mid, {
             "content": [{"type": "text", "text": text}],
