@@ -196,6 +196,19 @@ disclosure is mandatory and everything derived from it stamps `model-read`.
      doc derived from it. Artifacts the item links (an attachment, a supporting
      document) are **their own capture candidates: surface them, never silently
      drop them** (T-131).
+   - **The inbox (batch mode):** the user drops files into the Muninn's `inbox/`
+     (or you parked explore findings there on their opt-in) and says "ingest the
+     inbox." Process **each pending file through this same pipeline** (capture →
+     derive → index), `--origin-system inbox` (a parked preview note keeps the
+     origin it carries), and report a **digest** rather than gating per item —
+     bulk is the lower-supervision path, and capture is never gated (ADR-0007).
+     **Then clear each processed file (ADR-0006 / T-135):** once its source is
+     durably written — a dedup hit counts, the content is already held — remove
+     the pending file from `inbox/` and say so in the digest; its immutable copy now lives in `sources/`,
+     so nothing is lost and a re-dropped file is recognized, not duplicated. A
+     file that **fails** to process stays in the inbox and is named in the
+     digest — the inbox's meaning is exactly "still pending." A parked explore
+     finding the user **declines** is removed too (declined findings leave no trace).
    Report the dedup/version outcome the Core returns. If capture is **refused**
    because the `origin.ref` already belongs to another source (changed content at
    a known locator under a new id — a lineage split), re-capture under the id the
