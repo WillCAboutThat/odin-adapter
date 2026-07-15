@@ -433,10 +433,13 @@ class Linter:
                                  f"(summary chaining)", d.path)
                 all_reference = False
                 continue
-            # L4 hash-current / staleness
+            # L4 hash-current / staleness. `superseded` is exempt like `stale`:
+            # a CLOSED record (ADR-0041) is no longer obligated to track its
+            # sources — its provenance still verifies against the versions it names.
             recorded = s.get("hash") if isinstance(s, dict) else None
             current = ref.data.get("content_hash")
-            if recorded and current and recorded != current and d.data.get("status") != "stale":
+            if (recorded and current and recorded != current
+                    and d.data.get("status") not in ("stale", "superseded")):
                 self.error("L4", f"source '{sid}' changed but this doc is not "
                                  f"flagged stale", d.path)
             if ref.data.get("capture") != "reference":
@@ -482,6 +485,31 @@ class Linter:
                     self.warn("L18", f"summary ({summary_len} chars) is longer than its "
                               f"source ({src_len} chars) — summaries compress; enrich for "
                               f"findability, not length", d.path)
+
+        # L21 supersession-coherence (ADR-0041; always-on: no pre-existing base
+        # carries these fields, so none can fail it). A closed record's ending
+        # must cohere: the pointer resolves and is not the doc itself; the
+        # supersession fields appear only on a superseded doc; a superseded doc
+        # carries its stamp and a successor or a reason.
+        status = d.data.get("status")
+        sup_by = d.data.get("superseded_by")
+        if status == "superseded":
+            if not d.data.get("superseded_at"):
+                self.error("L21", "superseded doc has no superseded_at", d.path)
+            if sup_by is None and not d.data.get("supersede_reason"):
+                self.error("L21", "superseded doc names neither a successor "
+                                  "(superseded_by) nor a supersede_reason", d.path)
+            if sup_by is not None:
+                if sup_by == d.id:
+                    self.error("L21", "doc supersedes itself", d.path)
+                elif sup_by not in self.by_id:
+                    self.error("L21", f"superseded_by '{sup_by}' resolves to "
+                                      f"nothing", d.path)
+        else:
+            for f in ("superseded_by", "superseded_at", "supersede_reason"):
+                if d.data.get(f) is not None:
+                    self.error("L21", f"'{f}' present but status is "
+                                      f"'{status}', not 'superseded'", d.path)
 
     def _check_source_summaries(self):
         """L15 source-has-summary (ADR-0013): every source is grounded by >=1

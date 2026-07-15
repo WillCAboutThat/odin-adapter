@@ -403,7 +403,11 @@ derived_at: 2026-07-03T00:10:00Z    # required
 derived_by: odin/claude-code@v1     # optional — <faculty>/<tool>@<version> (ADR-0001)
 see_also:                       # optional — navigation links to OTHER derived docs
   - ent-acme-corp               # links, NOT provenance (I3)
-status: current                 # required: current | stale | draft
+status: current                 # required: current | stale | draft | superseded (format 1.2, ADR-0041)
+superseded_by: null             # optional (format 1.2, ADR-0041) — one-way pointer to the replacement,
+                                # recorded on the ENDED doc; must resolve (L21)
+superseded_at: null             # optional (format 1.2) — when; required iff status: superseded (L21)
+supersede_reason: null          # optional (format 1.2) — why; required when no superseded_by (L21)
 derivation: extracted           # optional — HOW this doc was grounded (§ below):
                                 #   extracted  (default) — via deterministic text (a text source or its aid)
                                 #   model-read — the model read the source bytes directly (image/scan)
@@ -414,6 +418,18 @@ as_of: 2026-07-11               # optional — the date a TIME-RELATIVE claim wa
                                 #   immutable datum + rule so none is needed; this is the residual.
 tags: [contract, vendor]        # optional
 ```
+
+**A superseded doc is closed, not hidden (format 1.2, ADR-0041).** `status:
+superseded` is the honest ending of a derived doc — refuted (a challenge),
+mis-filed and re-recorded, or replaced by a better derivation — written only by
+the consented `supersede` operation (reversible with its lift), never a
+hand-edit and never a delete. A closed record still lints (provenance never
+expires), is exempt from L4 staleness exactly as `stale` is, stays in the index
+badged `superseded`, is skipped by `find` unless asked
+(`--include-superseded`), and cannot be silently resurrected: deriving over a
+superseded id is refused. The pointer is one-way, on the ended doc; the
+replacement carries nothing (one fact, recorded once, where the ending
+happened).
 
 `abstract` (optional) is a **single human-readable line** describing what this
 document is, for skimming. It is authored at derivation time from the *same*
@@ -707,6 +723,12 @@ new fields are §5-permitted unknown fields: every 1.0-conformant base remains
 conformant, readable, and verifiable, unchanged, and a base that never anchors
 never changes at all.
 
+**1.2 is additive the same way (ADR-0041):** the *optional* supersession fields
+(`superseded_by` / `superseded_at` / `supersede_reason`, §5.2), one new derived
+`status` value (`superseded`), the `supersede` operation (§6), and L21 (§7,
+always-on but unfailable by any pre-1.2 base). A base that never supersedes
+never changes at all.
+
 **1.0 is the freeze, not a capability (ADR-0037).** 0.6 → 1.0 adds no new format
 requirement; it makes the additive pattern above the *promise*. From 1.0 the
 format evolves **additively only** — new optional fields, new enum values, new
@@ -779,6 +801,12 @@ mandates that the result conforms.
 - **Derive** (Odin): read one or more **sources**, write or update a derived
   document with a complete `sources` provenance list copied from those sources'
   current hashes (I2, I3), update `index.md`, append to `log.md`.
+- **Supersede** (consented, ADR-0041): mark a derived document ended —
+  `status: superseded` + `superseded_by` and/or `supersede_reason`, stamped
+  `superseded_at`; reversible (lift). Touches only these machine fields;
+  provenance and authored content are untouched, so everything still verifies.
+  Derived docs only (sources are immutable + versioned; decisions carry their
+  own supersession record).
 - **Lint**: run the checks in §7, report violations, and flag staleness. The
   pure checker is **read-only** and reports the content fingerprint (§4.4); the
   `lint` *skill* flags `status: stale` and appends the standardized lint entry
@@ -819,6 +847,7 @@ protects:
 | L18 summary-compression | A `summary`'s readable length (abstract + body) is **not** greater than its source(s)' text — a summary *compresses* (**warn**); enrich for findability, not length. Exempt: sources with no text layer (a `model-read` of an opaque image) and already-terse sources below a small floor (a short table/note is *already* summary-length) | §5.2, I4 |
 | L19 derived-integrity | A derived doc's `self_hash` matches its authored content (title + abstract + body), else it was edited **out of band** (**error**, only when enforced). The Core **always stamps** `self_hash` (accurate metadata every write, incl. `regenerate`, keeps current); the **opt-in** flag `integrity.derived_self_hash: true` governs only whether L19 **enforces** — so enabling it is instant and complete, and never false-positives on a legit regenerate. The one in-format signal for a hand-edited *derived* doc (sources are covered by L5). A doc with no `self_hash` (predates the feature) is skipped; `stamp` backfills them. Honesty tooling, not tamper-proofing (an adversary rewrites the hash too) | ADR-0029, I5 |
 | L20 anchor-coherence | **Opt-in** (`integrity.upstream_anchors: true`, the L19 posture): a partial capture's anchor fields cohere — `upstream_identity` matches a known form (`git-blob:<sha1>` \| `sha256:<hex64>`) and implies `origin.upstream_ref`; `anchored_at` implies an identity; a **declared** partial capture (`upstream_ref` present) is anchored at its current version (**error**, only when enforced). Off by default: a base with no anchor fields anywhere is simply *undeclared* — pre-1.1 bases never fail | ADR-0039, I5 |
+| L21 supersession-coherence | **Always-on** (no existing base carries the fields, so none can fail it): `superseded_by` resolves and is not the doc itself; the supersession fields appear only with `status: superseded`; a superseded doc carries `superseded_at` and a successor and/or a reason (**error**) | ADR-0041, I5 |
 
 L2 is the heart of the specification. It is the rule that makes summary
 chaining impossible to introduce without the linter rejecting it. L10 keeps a

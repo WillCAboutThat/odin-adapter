@@ -214,11 +214,14 @@ There are no commands to learn; you talk, and these are the verbs underneath:
 | *"what connects across our sources?"* | `synthesize` | Proposed cross-source insights, grounded and cited, written only on your nod. |
 | *"challenge our conclusions"* | `review` | An adversarial re-check of derived docs against the source bytes; read-only, advisory. |
 | *"review the pending pile"* | `review-candidates` | Batch-admit or decline the inferences Odin staged while reasoning; declines are remembered, never re-nagged. |
+| *"is that actually true? play devil's advocate"* | `challenge` | Adversarial second opinion on one claim — the sources re-read skeptically, the world searched for counter-evidence on your word; findings offered, never auto-written. |
 | *"is our memory current with the world?"* | `drift-check` | Re-fetch connector sources on your word, compare deterministically, flag what changed; staleness cascades to everything that rested on it. |
 | *"is our memory healthy?"* | `lint` | The structural check that defines done: provenance present, no summary chaining, staleness flagged, every source summarized. |
 
 Maintenance verbs exist too (`init`, `status`, `regenerate`, `reindex`,
-`retier`); Odin reaches for them when the moment calls, always visibly, and
+`retier`, `supersede` — that last one is how a conclusion you've overturned
+gets an honest ending: kept for the record, out of retrieval, never deleted);
+Odin reaches for them when the moment calls, always visibly, and
 the full contract ships in the bundle (`odin/docs/odin/SKILLS.md`).
 
 And everything above lands as plain Markdown + links in a folder you own:

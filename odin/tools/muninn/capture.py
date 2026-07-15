@@ -386,9 +386,15 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
     here: it is agentic and only *proposes* (ADR-0020 §4, the T-045 ladder). Core
     does the deterministic rungs only, and **no AI ever computes a hash**.
 
-    Returns: ``{"status": "already-captured"|"changed"|"new",
+    Returns: ``{"status": "already-captured"|"changed"|"new"
+                          |"same-after-newline-normalization",
                 "method": "content-hash"|"origin.ref",
                 "match_id": <id or None>, "content_hash": <hex or None>}``
+
+    ``same-after-newline-normalization`` (T-140e): the candidate would read
+    *changed* by raw hash, but the matched source's binary-hashed text-like
+    canonical differs ONLY by CRLF/LF line endings — a fetch-method artifact,
+    not drift. Comparison-side only; stored hashes are untouched.
     """
     root = Path(root)
     if id is not None:
@@ -429,18 +435,44 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
         canonical_name = "source.md"
     h = content_hash_of_canonical(canonical_name, raw)
 
+    def _newline_only(child, meta):
+        """The T-140e rung: a binary-hashed text-like canonical (suffix outside
+        TEXT_SUFFIXES, so raw bytes carry the hash) that differs from the
+        candidate ONLY by line endings is a fetch-method artifact, not drift.
+        Comparison-side only — the stored hash never changes meaning (T-013:
+        widening normalized hashing to code suffixes would fail L5 on every
+        base holding code files)."""
+        canonical = current_canonical(child, meta)
+        if canonical is None or canonical.suffix.lower() in TEXT_SUFFIXES:
+            return False           # text suffixes already normalize in the hash
+        try:
+            held = canonical.read_bytes().decode("utf-8")
+            fetched = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return False           # genuinely binary — nothing to normalize
+        return _lf(held).lstrip("﻿") == _lf(fetched).lstrip("﻿")
+
     for child, meta in _metas():
         if meta.get("content_hash") == h:
             return {"status": "already-captured", "method": "content-hash",
                     "match_id": meta.get("id", child.name), "content_hash": h}
 
     if id is not None and (sources / id).is_dir():
+        meta = _load_yaml(sources / id / "meta.yml")
+        if _newline_only(sources / id, meta):
+            return {"status": "same-after-newline-normalization",
+                    "method": "content-hash", "match_id": id, "content_hash": h}
         return {"status": "changed", "method": "content-hash",
                 "match_id": id, "content_hash": h}
 
     if origin_ref:
         for child, meta in _metas():
             if (meta.get("origin") or {}).get("ref") == origin_ref:
+                if _newline_only(child, meta):
+                    return {"status": "same-after-newline-normalization",
+                            "method": "origin.ref",
+                            "match_id": meta.get("id", child.name),
+                            "content_hash": h}
                 return {"status": "changed", "method": "origin.ref",
                         "match_id": meta.get("id", child.name), "content_hash": h}
 
@@ -760,7 +792,11 @@ def anchor(root, id, *, upstream_ref, upstream_file, form="sha256",
                 f"missing: {rep['missing_preview']}). An anchor must not claim what "
                 f"the held bytes don't satisfy (ADR-0039) — re-capture-as-version "
                 f"from the current upstream, or pass force with a reason if the "
-                f"missing chunks are judged to be the capture's own commentary.")
+                f"missing chunks are judged to be the capture's own commentary. "
+                f"If this body mixes prose and verbatim content without fences, "
+                f"the durable repair is a fenced re-capture-as-version (verbatim "
+                f"content inside fence blocks, disclosure outside): containment "
+                f"then checks deterministically forever (T-140).")
         if not (reason or "").strip():
             raise ValueError("a forced anchor requires a reason (it is stamping "
                              "past a failed containment check)")

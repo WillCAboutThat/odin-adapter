@@ -56,6 +56,11 @@ def _index_markers(d, current_by_source):
     srcs = d.data.get("sources") or []
     if srcs:
         parts.append(f"{len(srcs)} source" + ("s" if len(srcs) != 1 else ""))
+    if d.data.get("status") == "superseded":
+        # A closed record (ADR-0041): the ending is the one marker that matters —
+        # staleness no longer applies (its provenance names the versions it read).
+        parts.append("superseded")
+        return " · ".join(parts)
     stale = d.data.get("status") == "stale"
     for s in srcs:
         recorded = s.get("hash") if isinstance(s, dict) else None
@@ -160,7 +165,7 @@ def fingerprint(root):
 # --------------------------------------------------------------------------- #
 # find — deterministic retrieval (the substrate `find` presents and `ask` uses)
 # --------------------------------------------------------------------------- #
-def find(root, query, type=None):
+def find(root, query, type=None, include_superseded=False):
     """Return docs whose id/title/abstract/tags/body contain ALL whitespace-
     separated query terms (case-insensitive). Sources first, then derived, then
     projects/decisions, each by id. Returns [{id, kind, type, title, path}].
@@ -168,6 +173,10 @@ def find(root, query, type=None):
     `type` (optional) restricts results to docs of that frontmatter type — e.g.
     `type="decision"` is the retrieval half of the `why` verb (SPEC §5.5). An empty
     query with a type lists every doc of that type.
+
+    **Superseded docs are skipped by default** (ADR-0041): retrieval serves
+    current knowledge; a closed record surfacing in a grounding pass invites
+    citing it. `include_superseded=True` brings the history back.
     """
     root = Path(root)
     terms = [t for t in query.lower().split() if t]
@@ -178,6 +187,8 @@ def find(root, query, type=None):
         if d.kind == "manifest":
             continue
         if type is not None and d.type != type:
+            continue
+        if not include_superseded and d.data.get("status") == "superseded":
             continue
         parts = [d.id]
         for k in ("title", "abstract"):
@@ -530,7 +541,13 @@ def drift_worklist(root, project=None, all=False):
         system = origin.get("system")
         if not system or system in _LOCAL_ORIGINS or system == "inbox":
             continue
-        if origin.get("recoverable") is not True:
+        # Two gates admit a source to the sweep (T-140d): `recoverable: true`
+        # (the SOURCE's own bytes re-fetch via origin.ref) OR an upstream anchor
+        # (ADR-0039: a partial capture's sweep fetches the WHOLE via
+        # upstream_ref — which the anchor itself proves fetchable; recoverable
+        # was the wrong gate for this class and dropped anchored excerpts from
+        # the first live sweep).
+        if origin.get("recoverable") is not True and not origin.get("upstream_ref"):
             continue
         cur_entry = next((e for e in (d.data.get("history") or [])
                           if isinstance(e, dict)

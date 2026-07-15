@@ -199,9 +199,142 @@ def write_derived(root, id, *, body, sources, type="summary", title,
     ddir = root / _TYPE_DIR[type]
     ddir.mkdir(exist_ok=True)
     target = ddir / f"{id}.md"
+    # A superseded doc is a CLOSED record (ADR-0041): writing new content over
+    # it would silently resurrect it. Derive under a new id, or lift first.
+    if target.exists():
+        existing_fm, _ = util._read_doc(target)
+        if existing_fm.get("status") == "superseded":
+            raise ValueError(
+                f"'{id}' is superseded (a closed record) — derive under a new id, "
+                f"or `supersede {id} --lift` first if the supersession itself was "
+                f"the mistake (ADR-0041)")
     tmp = ddir / f".{id}.md.tmp"
     tmp.write_text(doc_text, encoding="utf-8")
     tmp.replace(target)  # atomic replace into place
     _append_log(root, derived_at, f"derive | {type} | {id} <- {', '.join(sources)}")
     return {"id": id, "type": type, "path": str(target),
             "sources": [p["id"] for p in prov]}
+
+
+# --------------------------------------------------------------------------- #
+# supersede — the honest ending of a derived doc (ADR-0041, T-063)
+# --------------------------------------------------------------------------- #
+_SUPERSEDE_FIELDS = ("superseded_by", "superseded_at", "supersede_reason")
+
+
+def _derived_doc_path(root, id):
+    """The on-disk file of a derived doc by id, or None. Derived dirs only —
+    supersede's scope guard rides on this (sources/decisions/projects excluded)."""
+    for dirname in _TYPE_DIR.values():
+        p = root / dirname / f"{id}.md"
+        if p.exists():
+            return p
+    return None
+
+
+@_locked
+def supersede(root, id, *, by=None, reason=None, lift=False):
+    """Mark a derived document superseded — or lift a mistaken mark (ADR-0041).
+
+    The honest ending the Core previously lacked: `status: superseded` +
+    `superseded_by` (one-way pointer, on the ended doc) + `superseded_at` +
+    `supersede_reason`. At least one of by/reason is required (an ending has a
+    successor or an explanation). Touches ONLY these machine fields: bytes,
+    provenance, and authored content are untouched, so `self_hash` (L19) stays
+    valid and every provenance re-verification still passes. Consented, logged,
+    idempotent, atomic. Scope: derived docs only — sources are immutable and
+    versioned (ending one is retention policy, T-046); decisions have their own
+    immutable-by-supersession mechanism; candidates have `decline`.
+
+    `lift=True` reverses a mistaken supersession (status back to `current`,
+    fields removed, logged) — the consented path back that keeps the hand-edit
+    temptation dead (the `retier --recoverable` precedent).
+    """
+    root = Path(root)
+    p = _derived_doc_path(root, id)
+    if p is None:
+        if (root / "sources" / id).exists():
+            raise ValueError(f"'{id}' is a source — sources are immutable and "
+                             f"versioned, never superseded (retention is T-046)")
+        if (root / "decisions" / f"{id}.md").exists():
+            raise ValueError(f"'{id}' is a decision — decisions supersede via "
+                             f"their own record (ADR-0000), not this op")
+        raise ValueError(f"no derived document '{id}'")
+    fm, body = util._read_doc(p)
+
+    if lift:
+        if fm.get("status") != "superseded":
+            return {"id": id, "status": fm.get("status"), "changed": False}
+        fm["status"] = "current"
+        for f in _SUPERSEDE_FIELDS:
+            fm.pop(f, None)
+        _rewrite_doc(p, fm, body)
+        _append_log(root, util._now(), f"supersede | lifted | {id}")
+        return {"id": id, "status": "current", "changed": True}
+
+    if not by and not (reason or "").strip():
+        raise ValueError("supersede needs --by (the replacement id) and/or "
+                         "--reason (why this doc is ended)")
+    if by is not None:
+        if by == id:
+            raise ValueError("a document cannot supersede itself")
+        by_exists = (_derived_doc_path(root, by) is not None
+                     or (root / "decisions" / f"{by}.md").exists())
+        if not by_exists:
+            raise ValueError(f"superseded_by '{by}' resolves to nothing — the "
+                             f"replacement must exist first (record it, then "
+                             f"supersede the original)")
+
+    if (fm.get("status") == "superseded"
+            and fm.get("superseded_by") == by
+            and fm.get("supersede_reason") == reason):
+        return {"id": id, "status": "superseded", "changed": False}
+
+    when = util._now()
+    fm["status"] = "superseded"
+    if by is not None:
+        fm["superseded_by"] = by
+    fm["superseded_at"] = when
+    if reason:
+        fm["supersede_reason"] = reason
+    _rewrite_doc(p, fm, body)
+    note = f" -> {by}" if by else ""
+    _append_log(root, when, f"supersede | {id}{note}"
+                            + (f" ({reason})" if reason else ""))
+    return {"id": id, "status": "superseded", "superseded_by": by,
+            "superseded_at": when, "changed": True}
+
+
+def _rewrite_doc(p, fm, body):
+    body_text = body if body.endswith("\n") else body + "\n"
+    tmp = p.with_name(f".{p.name}.tmp")
+    tmp.write_text("---\n" + _dump_yaml(fm) + "---\n" + body_text, encoding="utf-8")
+    tmp.replace(p)
+
+
+# --------------------------------------------------------------------------- #
+# challenge-log — the outcome history of a consented challenge (ADR-0040)
+# --------------------------------------------------------------------------- #
+CHALLENGE_OUTCOMES = ("survived", "weakened", "refuted")
+
+
+def log_challenge(root, target, *, outcome, detail=None):
+    """Record a completed **challenge** in the append-only log (ADR-0040 §5,
+    the drift-log precedent): history a reader can consult ("this claim has
+    been stress-tested, on these dates"), never a verdict the format stores.
+    Deliberately NO doc mark, NO status field, NO trust score — skepticism is
+    an operation, not a format axis. `target` is the challenged doc's id (or a
+    short claim slug when the challenge tested a claim not yet written down).
+    """
+    if not (target or "").strip():
+        raise ValueError("challenge-log needs the challenged target (doc id or claim slug)")
+    if outcome not in CHALLENGE_OUTCOMES:
+        raise ValueError(f"outcome must be one of {' | '.join(CHALLENGE_OUTCOMES)}, "
+                         f"got {outcome!r}")
+    root = Path(root)
+    when = util._now()
+    line = f"challenge | {target}: {outcome}"
+    if detail:
+        line += f" | {detail}"
+    _append_log(root, when, line)
+    return {"target": target, "outcome": outcome, "logged_at": when}

@@ -672,7 +672,10 @@ with no connectivity forever, ADR-0008; reaching is Huginn's consented act).
      region itself moved → the *changed* column, offer re-capture). You never
      eyeball-diff.
    - **Whole-source capture:** `… dedup-check <root> --source-file <fetched>
-     --id <src-id>` → *already-captured* (same) / *changed*. You never hash.
+     --id <src-id>` → *already-captured* (same) / *changed* /
+     *same-after-newline-normalization* (T-140: a code/text file whose fetch
+     differs only by CRLF/LF line endings — report it in the **same** column,
+     named as an artifact, never as drift). You never hash or eyeball-diff.
    - A locator-only reference source gets a reachability check; a
      stand-in-bodied one compares against the stand-in — **say so** when
      reporting it. An **unanchored excerpt** (partial capture, no identity)
@@ -680,9 +683,17 @@ with no connectivity forever, ADR-0008; reaching is Huginn's consented act).
      whole, and **offer the `anchor` backfill** — fetch the whole, then
      `… anchor <root> <src-id> --upstream-ref <whole> --upstream-file
      <fetched> [--form git-blob]`; the Core verifies containment FIRST and
-     refuses to stamp what the held bytes don't satisfy (a refusal listing
-     missing chunks that are your own disclosure prose may be overruled with
-     `--force --reason …` — the owner's judgment, logged).
+     refuses to stamp what the held bytes don't satisfy. **Handle a refusal
+     with evidence, not a shrug (T-140):** extract the verbatim chunks from
+     the body yourself, search the fetched upstream for each, and present
+     what you found — *"the missing chunks are the capture's own disclosure
+     prose; the actual code is present verbatim"* — THEN overrule with
+     `--force --reason <that evidence>` (the owner's judgment, logged). A
+     force-stamped anchor fixes the identity tier permanently but the
+     unfenced body stays containment-opaque, so also **offer the durable
+     repair: a fenced re-capture-as-version** (verbatim content inside fence
+     blocks, disclosure outside; anchor at capture) — containment then checks
+     deterministically forever.
 3. **Report the sweep**: one table — **same / changed / unreachable** — then
    record it: `… drift-log <root> --same N --changed M --unreachable K
    [--detail …]`. The log is the sweep's memory (`status` reads it for the
@@ -736,6 +747,29 @@ orchestration you run with the Core's `derive`, not a new Core op.
 
 Always **offer** the heal and show what you'll do; never silently rewrite memory.
 Then re-`lint` and report clean.
+
+## Supersede (the honest ending of a derived doc — ADR-0041)
+
+Some pages don't need a refresh; they need an **ending**: a claim the user has
+overturned, a doc mis-filed and re-recorded under the right type, a derivation
+replaced by a better one. That is `… supersede <root> <id> [--by <replacement>]
+[--reason <why>]` — never a hand-edit, never a delete.
+
+- **Sequence: replacement first.** Record/derive the successor, then supersede
+  the original pointing at it (`--by` must resolve). No successor? A reason is
+  required — an ending has an explanation.
+- **What it means:** the doc is **closed, not hidden** — still lints, still in
+  the index (badged `superseded`), exempt from L4 staleness, skipped by `find`
+  unless `--include-superseded`. Say this when you supersede: *"kept for the
+  record, out of retrieval."*
+- **Mistake path:** `--lift` restores `current` (logged). Offer it when the
+  user says a supersession was wrong; never edit frontmatter by hand.
+- **Refusals are honest:** deriving over a superseded id is refused (no silent
+  resurrection — new id, or lift first); sources and decisions can't be
+  superseded by this op (versioning and the decision record are their endings).
+- **Consent:** superseding is the user's call, always offered, never a side
+  effect of `regenerate`/`review`/`ask`. When a review or challenge overturns a
+  claim, *offer* the supersede with the replacement in hand.
 
 ## Synthesize (inward discovery — the differentiator)
 
@@ -964,6 +998,55 @@ detect→consent→repair loop as lint).
 **It is `review`, not `audit`** — "audit" already means the *deterministic* check
 (re-read + re-hash provenance, ADR-0014); `review` is the subjective second
 opinion. Keep the words distinct. On-demand and advisory — **never a gate**.
+
+## Challenge (devil's advocate — suspend trust-the-base, on the user's word)
+
+**The warranty line first, because this verb exists to test what's outside it
+(ADR-0040):** *provenance warrants derivation, not truth.* The base warrants
+"faithfully what the source said, as of when, derived without chaining" —
+whether the source was **right about the world** was never inside the
+warranty. Your default trust in the base is correct and load-bearing (the
+compounding value is *not re-deriving*); `challenge` is the named, consented
+way OUT of that posture for one claim. Triggers: *"is that actually true?"*,
+*"play devil's advocate"*, *"get a second opinion"*, *"challenge that."*
+
+**Not `review`:** `review` is the maintenance sweep over derived docs (is our
+memory still honest against its sources?); `challenge` is the adversarial
+interrogation of ONE claim, and it may reach **outside** the base. Same engine,
+different intents — when the user names a specific claim to attack, it's
+`challenge`; "re-check our conclusions" broadly is `review`.
+
+1. **Internal mode first, always** (cheap, reaches nothing; most bad claims die
+   here). Re-read the cited sources adversarially: **quote** what they actually
+   state; **dissolve** anything they don't; name the **weakest assurance link**
+   in the chain (a reference-tier peer, a model-read rung, a mixed full+reference
+   grounding — say which). This is the CHALLENGER discipline pointed at the
+   user's own knowledge.
+2. **External mode on the user's word** (it reaches outward, like explore /
+   drift-check — never automatically). Treat the claim as a **hypothesis** and
+   look outside for *disconfirming* evidence, not confirmation. Anything fetched
+   that the user keeps goes through the full capture-fidelity discipline
+   (full bits, tier honesty, anchors for excerpts).
+3. **Fresh context where the harness allows it (ADR-0015):** run the internal
+   pass in a **fresh subagent** that receives only the claim + the base path
+   and reads from disk — an in-context source poisons its own check; a
+   same-session devil's advocate may defend its own prior reading. Where a
+   subagent isn't available, run in-session and **say the check is weakened.**
+4. **Write nothing by default.** Running a challenge produces conversation.
+   Each knowledge-product is its own consented act, offered, never assumed:
+   a **counter-insight** or **caveat** (grounded, cited, no chaining) — or,
+   when the claim is genuinely overturned, **offer `supersede`** with the
+   replacement recorded first (ADR-0041). Never silently edit the challenged
+   doc; never store a trust score anywhere.
+5. **Close with the log line** (after any consented products): `… challenge-log
+   <root> <target> --outcome survived|weakened|refuted [--detail …]` — history
+   a future reader can consult, never a mark on the doc.
+6. **Voice rule: challenge output is framed as challenge, never as base fact.**
+   *"Under challenge, this claim weakens: the source states X, not Y"* — and a
+   survival is reported as *"survived this challenge,"* never "verified true."
+
+**Never:** auto-runs (the user mentioning doubt is not an invocation — ask);
+writes uninvited; reaches outside without the user's word; rates truth.
 
 ## Usage logging (measure the AI-heavy verbs — best-effort, never a gate)
 

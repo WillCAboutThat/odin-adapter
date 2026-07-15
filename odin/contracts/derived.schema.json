@@ -34,7 +34,10 @@
       "items": { "type": "string" },
       "description": "Navigation links to OTHER derived docs — links, never provenance (I3)."
     },
-    "status": { "enum": ["current", "stale", "draft"] },
+    "status": { "enum": ["current", "stale", "draft", "superseded"], "description": "superseded (format 1.2, ADR-0041) = a CLOSED record: exempt from L4 staleness, skipped by find by default, badged in the index; provenance still verifies forever." },
+    "superseded_by": { "type": "string", "description": "OPTIONAL (format 1.2, ADR-0041). One-way pointer to the replacement doc, recorded on the ended doc. Must resolve (L21)." },
+    "superseded_at": { "type": "string", "format": "date-time", "description": "OPTIONAL (format 1.2, ADR-0041). When the doc was superseded; required iff status: superseded (L21)." },
+    "supersede_reason": { "type": "string", "description": "OPTIONAL (format 1.2, ADR-0041). Why; required when no superseded_by is named (L21)." },
     "derivation": {
       "enum": ["extracted", "model-read", "synthesis"],
       "description": "HOW this doc was grounded (ADR-0011); absent defaults to extracted. The assurance rung `ask` rolls up weakest-link."

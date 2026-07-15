@@ -58,9 +58,11 @@ from muninn.capture import (  # noqa: E402,F401
     upstream_identity_of,
 )
 from muninn.derive import (  # noqa: E402,F401
+    log_challenge,
     relink,
     _TYPE_DIR,
     stamp_derived,
+    supersede,
     write_derived,
 )
 from muninn.candidates import (  # noqa: E402,F401

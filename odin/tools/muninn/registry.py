@@ -12,7 +12,7 @@ from . import util  # noqa: E402  (module-attr access = the patch point)
 from .candidates import decline_candidate, list_candidates, promote_candidate, stage_candidate  # noqa: E402
 from .capture import anchor, anchor_check, capture, capture_file, capture_repo, dedup_check, log_drift_check, retier, source_status  # noqa: E402
 from .decisions import lint_report, record_decision, status  # noqa: E402
-from .derive import relink, stamp_derived, write_derived  # noqa: E402
+from .derive import log_challenge, relink, stamp_derived, supersede, write_derived  # noqa: E402
 from .projections import connector_projection, drift_worklist, find, fingerprint, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
 from .scaffold import init  # noqa: E402
 from .usage import _source_bytes, log_usage, usage_html, usage_log, usage_report  # noqa: E402
@@ -737,6 +737,65 @@ OPS = {
             bytes_out=p.get("bytes_out", 0), tokens=p.get("tokens"),
             note=p.get("note")),
     },
+    "challenge-log": {
+        "help": "record a completed challenge's outcome in the append-only "
+                "log (history, never a stored verdict; ADR-0040)",
+        "description": "Record a completed challenge in the append-only log "
+                       "(ADR-0040): 'challenge | <target>: survived|weakened|"
+                       "refuted [detail]'. History a reader can consult, never "
+                       "a verdict the format stores — no doc mark, no status "
+                       "field, no trust score. Run it once per completed "
+                       "challenge, after any consented knowledge-products "
+                       "(counter-insight / caveat / supersede) are written.",
+        "params": {
+            "root": _ROOT_P,
+            "target": {"type": "string", "required": True,
+                       "cli": {"positional": True},
+                       "description": "The challenged doc id (or a short claim "
+                                      "slug for an unwritten claim)."},
+            "outcome": {"type": "string", "required": True,
+                        "enum": ["survived", "weakened", "refuted"],
+                        "description": "What the challenge concluded."},
+            "detail": {"type": "string",
+                       "description": "One line of context (what was checked, "
+                                      "what was recorded)."},
+        },
+        "handler": lambda root, p: log_challenge(root, p["target"],
+                                                 outcome=p["outcome"],
+                                                 detail=p.get("detail")),
+    },
+    "supersede": {
+        "help": "mark a derived doc superseded (the honest ending; reversible "
+                "with --lift; ADR-0041)",
+        "description": "Mark a derived document SUPERSEDED (ADR-0041) — the "
+                       "honest ending: status: superseded + a one-way pointer "
+                       "(superseded_by) and/or a reason, stamped superseded_at. "
+                       "Consented, logged, idempotent; touches only these machine "
+                       "fields (provenance and authored content untouched, so "
+                       "everything still verifies). A superseded doc still lints, "
+                       "stays in the index badged, is exempt from L4 staleness, "
+                       "and is skipped by find unless asked. Derived docs only: "
+                       "never sources (immutable, versioned) or decisions (their "
+                       "own supersession record). lift=true reverses a mistaken "
+                       "mark. Use when a claim is refuted (challenge), a doc was "
+                       "mis-filed and re-recorded, or a better derivation replaced "
+                       "it — never a hand-edit, never a delete.",
+        "params": {
+            "root": _ROOT_P,
+            "id": _ID_POS,
+            "by": {"type": "string",
+                   "description": "Id of the replacement doc (must exist first)."},
+            "reason": {"type": "string",
+                       "description": "Why this doc is ended (required when no "
+                                      "replacement is named)."},
+            "lift": {"type": "boolean",
+                     "description": "Reverse a mistaken supersession (status back "
+                                    "to current; fields removed; logged)."},
+        },
+        "handler": lambda root, p: supersede(root, p["id"], by=p.get("by"),
+                                             reason=p.get("reason"),
+                                             lift=bool(p.get("lift"))),
+    },
     "find": {
         "help": "retrieve docs matching a query (deterministic; the AI-free floor)",
         "description": "Deterministic retrieval: docs whose id/title/abstract/"
@@ -751,13 +810,17 @@ OPS = {
                       "cli": {"positional": True, "nargs": "*", "join": True}},
             "type": {"type": "string",
                      "description": "Restrict to a frontmatter type."},
+            "include_superseded": {"type": "boolean",
+                                   "description": "Include superseded (closed) docs "
+                                                  "— skipped by default (ADR-0041)."},
         },
         # ONE result shape on both surfaces (T-113): the CLI's T-106 wrapper
         # {matches, count} wins — self-describing beats a bare list; the MCP
         # tool previously returned the bare list (a live drift this closes).
         "handler": lambda root, p: (lambda hits: {"matches": hits,
                                                   "count": len(hits)})(
-            find(root, p["query"], type=p.get("type"))),
+            find(root, p["query"], type=p.get("type"),
+                 include_superseded=bool(p.get("include_superseded")))),
         "presenter": _show_find,
     },
     "project": {
