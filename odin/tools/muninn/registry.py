@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from . import util  # noqa: E402  (module-attr access = the patch point)
 from .candidates import decline_candidate, list_candidates, promote_candidate, stage_candidate  # noqa: E402
-from .capture import capture, capture_file, capture_repo, dedup_check, log_drift_check, retier, source_status  # noqa: E402
+from .capture import anchor, anchor_check, capture, capture_file, capture_repo, dedup_check, log_drift_check, retier, source_status  # noqa: E402
 from .decisions import lint_report, record_decision, status  # noqa: E402
 from .derive import relink, stamp_derived, write_derived  # noqa: E402
 from .projections import connector_projection, drift_worklist, find, fingerprint, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
@@ -51,6 +51,8 @@ def _op_capture(root, p):
         origin["recoverable"] = p["recoverable"]
     if p.get("captured_by"):
         origin["captured_by"] = p["captured_by"]
+    if p.get("upstream_ref"):
+        origin["upstream_ref"] = p["upstream_ref"]
     when = util._now()
     if p.get("source_file"):
         src = Path(p["source_file"])
@@ -58,12 +60,14 @@ def _op_capture(root, p):
                             p.get("filename") or src.name, origin=origin,
                             tier=p.get("tier", "full"),
                             capture_reason=p.get("reason"), when=when,
-                            force_new=bool(p.get("force_new")))
+                            force_new=bool(p.get("force_new")),
+                            upstream_identity=p.get("upstream_identity"))
     if p.get("body") is None:
         raise ValueError("capture needs `body` (text source) or `source_file` (bytes)")
     return capture(root, p["id"], p["body"], origin=origin,
                    tier=p.get("tier", "full"), capture_reason=p.get("reason"),
-                   when=when, force_new=bool(p.get("force_new")))
+                   when=when, force_new=bool(p.get("force_new")),
+                   upstream_identity=p.get("upstream_identity"))
 
 
 def _usage_capture(root, p, res, duration_ms=None):
@@ -213,6 +217,18 @@ OPS = {
             "force_new": {"type": "boolean",
                           "description": "Deliberately start a NEW lineage although origin_ref "
                                          "matches an existing source (the split is logged; T-045)."},
+            "upstream_ref": {"type": "string",
+                             "description": "For a PARTIAL capture (an excerpt of a larger "
+                                            "whole): the whole's clean locator (ADR-0039). "
+                                            "Presence declares the source an excerpt; "
+                                            "origin_ref itself must stay a distinct, "
+                                            "excerpt-qualified locator (T-045)."},
+            "upstream_identity": {"type": "string",
+                                  "description": "The whole's content identity as of this "
+                                                 "read — git-blob:<sha1> | sha256:<hex64> — "
+                                                 "recorded per-version; makes drift-check "
+                                                 "exact for this excerpt (ADR-0039). "
+                                                 "Requires upstream_ref."},
         },
         "handler": _op_capture,
         "usage": _usage_capture,
@@ -281,6 +297,71 @@ OPS = {
         "handler": lambda root, p: retier(root, p["id"], p.get("tier"),
                                           reason=p.get("reason"),
                                           recoverable=p.get("recoverable")),
+    },
+    "anchor-check": {
+        "help": "two-tier drift check of ONE anchored partial capture against "
+                "a fetched upstream file (ADR-0039; read-only)",
+        "description": "Check one anchored partial capture against its fetched "
+                       "upstream whole (ADR-0039). Tier 1: recorded vs current "
+                       "upstream_identity, raw opaque equality — equal → "
+                       "upstream-unchanged (byte-certain, region included). "
+                       "Tier 2 on mismatch: are the excerpt's chunks still in "
+                       "the fetched text? All → upstream-changed-region-intact; "
+                       "any missing → region-drifted (offer re-locate / "
+                       "re-capture-as-version). No anchor → unanchored. "
+                       "Read-only; fetching the upstream is the adapter's "
+                       "consented reach (T-136).",
+        "params": {
+            "root": _ROOT_P,
+            "id": _ID_POS,
+            "upstream_file": {"type": "string", "required": True,
+                              "description": "Path to the FETCHED current upstream "
+                                             "whole (the adapter fetches; the Core "
+                                             "compares)."},
+        },
+        "handler": lambda root, p: anchor_check(root, p["id"],
+                                                upstream_file=p["upstream_file"]),
+    },
+    "anchor": {
+        "help": "attach an upstream anchor to an existing partial capture "
+                "(consented backfill; containment-verified FIRST; ADR-0039)",
+        "description": "Attach an upstream anchor to an EXISTING partial capture "
+                       "— the ADR-0039 backfill (relink/stamp precedent). Runs "
+                       "the containment check FIRST and stamps origin."
+                       "upstream_ref + the current version's upstream_identity/"
+                       "anchored_at only when the held excerpt is contained in "
+                       "the supplied upstream; a failure is reported, not "
+                       "stamped (force + reason to overrule, logged). Bytes, "
+                       "content_hash, version untouched — provenance verifies "
+                       "unchanged. Idempotent.",
+        "params": {
+            "root": _ROOT_P,
+            "id": _ID_POS,
+            "upstream_ref": {"type": "string", "required": True,
+                             "description": "Clean locator of the whole this "
+                                            "excerpt was read from."},
+            "upstream_file": {"type": "string", "required": True,
+                              "description": "Path to the fetched current upstream "
+                                             "whole to verify against and identify."},
+            "form": {"type": "string", "enum": ["sha256", "git-blob"],
+                     "default": "sha256",
+                     "description": "Identity form to stamp (git-blob for "
+                                    "git-backed upstreams: comparable against a "
+                                    "remote with no fetch)."},
+            "force": {"type": "boolean",
+                      "description": "Stamp past a failed containment check "
+                                     "(requires reason; logged)."},
+            "reason": {"type": "string",
+                       "description": "Why a forced anchor is honest (e.g. the "
+                                      "missing chunks are the capture's own "
+                                      "disclosure prose)."},
+        },
+        "handler": lambda root, p: anchor(root, p["id"],
+                                          upstream_ref=p["upstream_ref"],
+                                          upstream_file=p["upstream_file"],
+                                          form=p.get("form", "sha256"),
+                                          force=bool(p.get("force")),
+                                          reason=p.get("reason")),
     },
     "drift-worklist": {
         "help": "enumerate the recoverable connector sources whose remote may "

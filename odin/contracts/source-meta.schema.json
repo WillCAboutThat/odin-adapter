@@ -17,9 +17,10 @@
       "description": "Where this record came from (§5.1).",
       "properties": {
         "system": { "type": "string", "description": "e.g. file, url, chat, repo, jira, api, …" },
-        "ref": { "type": "string", "description": "Canonical locator within the system. Also the deterministic identity signal of the T-045 locator rung — give each distinct evolving source a distinct ref." },
+        "ref": { "type": "string", "description": "Canonical locator within the system. Also the deterministic identity signal of the T-045 locator rung — give each distinct evolving source a distinct ref. A PARTIAL capture's ref is the whole's locator plus an excerpt-discriminating qualifier (ADR-0039): two excerpts of one file must not share a ref." },
         "captured_by": { "type": "string", "description": "<faculty>/<tool>@<version> (ADR-0001)." },
-        "recoverable": { "type": "boolean", "description": "True when the original bytes can be re-fetched via ref (ADR-0010); false for e.g. chat (ADR-0003)." }
+        "recoverable": { "type": "boolean", "description": "True when the original bytes can be re-fetched via ref (ADR-0010); false for e.g. chat (ADR-0003)." },
+        "upstream_ref": { "type": "string", "description": "OPTIONAL (format 1.1, ADR-0039). The clean locator of the WHOLE this source partially captures (an excerpt of a larger file/page/document). Presence is the machine-readable partial-capture declaration; absence means undeclared — never 'full'. Stable across versions; the per-read identity lives per-version in history[].upstream_identity." }
       }
     },
     "capture": { "enum": ["full", "reference"], "description": "Capture tier (ADR-0003)." },
@@ -44,7 +45,9 @@
           "file": { "type": "string", "description": "Canonical bytes: source.<ext> for the current version, source.v<N>.<ext> for prior." },
           "text_aid": { "type": ["string", "null"], "description": "The non-authoritative extracted-text aid for this version, if any (ADR-0010)." },
           "extracted_by": { "type": ["string", "null"], "description": "Which extractor produced the aid (present iff text_aid)." },
-          "supersedes": { "type": ["integer", "null"], "description": "Version number this replaced, or null for v1." }
+          "supersedes": { "type": ["integer", "null"], "description": "Version number this replaced, or null for v1." },
+          "upstream_identity": { "type": "string", "pattern": "^(git-blob:[0-9a-f]{40}|sha256:[0-9a-f]{64})$", "description": "OPTIONAL (format 1.1, ADR-0039). The upstream WHOLE's content identity as of this version's read, form-tagged: git-blob (git's own object hash — comparable against a remote with no content fetch) or sha256 of the fetched bytes. Raw opaque equality, never normalized. Makes drift-check exact for a partial capture: identity unchanged → the excerpted region is unchanged, byte-certain." },
+          "anchored_at": { "type": "string", "format": "date-time", "description": "OPTIONAL (format 1.1, ADR-0039). Present ONLY when the anchor was attached after capture by the consented `anchor` backfill (containment-verified first); absent means the anchor is as of this version's captured_at." }
         }
       }
     },

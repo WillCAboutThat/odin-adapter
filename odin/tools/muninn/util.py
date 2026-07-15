@@ -17,12 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import muninn_lint  # noqa: E402
 
 
-FORMAT_VERSION = "1.0"  # frozen — additive-only evolution from here (ADR-0037)
+FORMAT_VERSION = "1.1"  # 1.0 frozen (ADR-0037); 1.1 = + optional upstream anchors (ADR-0039)
 
 
 # The TOOL's version, distinct from the format's (T-118c): single-sourced from
 # pyproject [project] version — tests/test_id_validation.py pins the two equal.
-TOOL_VERSION = "1.7.1"
+TOOL_VERSION = "1.8.0"
 
 
 # Ids become filesystem paths (sources/<id>/, <id>.md) and arrive as

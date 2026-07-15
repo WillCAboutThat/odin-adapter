@@ -293,6 +293,12 @@ origin:                         # required — where this came from
   captured_by: huginn/claude-code@v1   # optional — <faculty>/<tool>@<version> (ADR-0001)
   recoverable: true             # true when the original bytes are held (set by capture, ADR-0010);
                                 # false when the original can't be re-fetched (e.g. chat, ADR-0003)
+  upstream_ref: null            # optional (format 1.1, ADR-0039) — for a PARTIAL capture (an
+                                # excerpt of a larger whole: one clause of a contract, a section
+                                # of a wiki page, a region of a repo file): the WHOLE's clean
+                                # locator. Presence declares the excerpt; absence = undeclared,
+                                # never "full". The excerpt's own `ref` must stay distinct
+                                # (whole + excerpt qualifier — T-045: no two excerpts share a ref)
 capture: full                   # required — full | reference (ADR-0003)
 capture_reason: null            # required IFF capture: reference — e.g. licensed, too-large, live, private
 captured_at: 2026-07-03T00:00:00Z   # required (ISO 8601, UTC)
@@ -306,6 +312,13 @@ history:                            # required — the version ledger (§4.3); o
     text_aid: source-text.md      # optional — the extracted-text aid for this version (§4.3); absent if none
     extracted_by: pypdf@6.14.2    # optional — which extractor produced the aid (present iff text_aid)
     supersedes: null              # version number this replaced, or null
+    upstream_identity: null       # optional (format 1.1, ADR-0039) — the upstream WHOLE's content
+                                  # identity as of THIS version's read, form-tagged:
+                                  # git-blob:<sha1> | sha256:<hex64>. Raw opaque equality, never
+                                  # normalized. Anchors describe read events, so they live per-version
+    anchored_at: null             # optional (format 1.1, ADR-0039) — present ONLY when the anchor
+                                  # was attached later by the consented `anchor` backfill
+                                  # (containment-verified first); absent = as of captured_at
 tags: [contract, vendor]            # optional
 ```
 
@@ -318,6 +331,26 @@ Capture tiers (ADR-0003):
 - `capture: reference` — we hold a locator plus an optional excerpt, not the
   whole source. `capture_reason` is required and states why. A reference capture
   is a weaker source (§7, L10).
+
+**Partial captures and upstream anchors (format 1.1, ADR-0039).** An excerpt of
+a larger upstream whole (typically `capture: reference`, with the excerpt as the
+held evidence) may carry a machine-checkable **anchor**: `origin.upstream_ref`
+(the whole's clean locator; presence *declares* the partial capture) plus a
+per-version `history[].upstream_identity` (the whole's content identity as of
+that read). This closes the gap that the content hash warrants only the excerpt
+bytes while the excerpt's relation to its whole was prose-only. The drift check
+is two-tier: **identity** (raw opaque equality; unchanged → the excerpted region
+is unchanged, byte-certain, no content fetch for `git-blob`) then **containment**
+(are the excerpt's chunks — fenced-block contents when the body has fences, else
+the whole body — still present in the fetched whole, LF-canonicalized both sides
+per §4.2, leading BOM stripped on the fetched side, no other normalization?).
+Verdicts: `upstream-unchanged` · `upstream-changed-region-intact` (an unrelated
+edit elsewhere in the whole is not staleness) · `region-drifted` (surface it;
+never silently repair, I5) · `unanchored` (no claim — every pre-1.1 base). All
+anchor fields are optional; anchoring never gates capture. Existing partial
+captures are anchored by the consented `anchor` backfill op, which verifies
+containment **before** stamping. One upstream per source: an anchor records a
+read event; corroboration across places belongs to derivation (ADR-0009).
 
 **Repo sources (`origin.system: repo`, ADR-0028).** A repository is captured as a
 **reference** source whose held text is its **constitution manifest** — a deterministic
@@ -666,6 +699,14 @@ extracted-text aid and the ledger's `text_aid`/`extracted_by` fields, and has
 `source.md`, no aids — remains conformant unchanged. Adopting the new capabilities
 is opt-in.
 
+**1.0 is frozen (ADR-0037); 1.1 is additive under that freeze (ADR-0039):** it
+adds only the *optional* upstream-anchor fields (`origin.upstream_ref`,
+`history[].upstream_identity` / `anchored_at`, §5.1), the `anchor` /
+`anchor-check` operations (§6), and the **opt-in** L20 (§7). To a 1.0 reader the
+new fields are §5-permitted unknown fields: every 1.0-conformant base remains
+conformant, readable, and verifiable, unchanged, and a base that never anchors
+never changes at all.
+
 **1.0 is the freeze, not a capability (ADR-0037).** 0.6 → 1.0 adds no new format
 requirement; it makes the additive pattern above the *promise*. From 1.0 the
 format evolves **additively only** — new optional fields, new enum values, new
@@ -718,6 +759,17 @@ mandates that the result conforms.
   Capture enforces. These are the deterministic dedup rungs `explore` previews on
   before offering `ingest` (ADR-0020); the fuzzy similarity rung is agentic
   (adapter-side, proposes only), and **no AI computes the hash**.
+- **Anchor-check** (read-only, ADR-0039): the two-tier drift check of one
+  anchored partial capture against a **fetched** current upstream (the fetch is
+  the adapter's consented reach, T-136; the comparison is the Core's faithful
+  transform). Returns the verdicts of §5.1's partial-capture block.
+- **Anchor** (consented backfill, ADR-0039): attach an upstream anchor to an
+  *existing* partial capture — containment is verified **first** and the anchor
+  is stamped only when the held excerpt satisfies it (a failure is reported,
+  not stamped; a declared `force` requires a reason and is logged). Bytes,
+  `content_hash`, `version`, and history structure are untouched, so all
+  provenance verifies unchanged. Idempotent; the migration companion of the
+  format-1.1 fields (the `relink`/`stamp` precedent).
 - **Source-status** (read-only): report a source's deterministic facts — tier,
   version, whether its **current canonical bytes are held** (`has_bytes`),
   `recoverable`, and `origin.ref`. Writes nothing. This is the ground truth the
@@ -766,6 +818,7 @@ protects:
 | L17 decision-integrity | A `decisions/` doc has `id`/`type`/`title`/`status`/`date`, `status` ∈ `proposed` \| `accepted`, and every `evidence` id resolves to a real source (**error**); an evidence source whose `version` has advanced past the recorded one is a **soft note** (warn), never stale | §5.5, ADR-0019 |
 | L18 summary-compression | A `summary`'s readable length (abstract + body) is **not** greater than its source(s)' text — a summary *compresses* (**warn**); enrich for findability, not length. Exempt: sources with no text layer (a `model-read` of an opaque image) and already-terse sources below a small floor (a short table/note is *already* summary-length) | §5.2, I4 |
 | L19 derived-integrity | A derived doc's `self_hash` matches its authored content (title + abstract + body), else it was edited **out of band** (**error**, only when enforced). The Core **always stamps** `self_hash` (accurate metadata every write, incl. `regenerate`, keeps current); the **opt-in** flag `integrity.derived_self_hash: true` governs only whether L19 **enforces** — so enabling it is instant and complete, and never false-positives on a legit regenerate. The one in-format signal for a hand-edited *derived* doc (sources are covered by L5). A doc with no `self_hash` (predates the feature) is skipped; `stamp` backfills them. Honesty tooling, not tamper-proofing (an adversary rewrites the hash too) | ADR-0029, I5 |
+| L20 anchor-coherence | **Opt-in** (`integrity.upstream_anchors: true`, the L19 posture): a partial capture's anchor fields cohere — `upstream_identity` matches a known form (`git-blob:<sha1>` \| `sha256:<hex64>`) and implies `origin.upstream_ref`; `anchored_at` implies an identity; a **declared** partial capture (`upstream_ref` present) is anchored at its current version (**error**, only when enforced). Off by default: a base with no anchor fields anywhere is simply *undeclared* — pre-1.1 bases never fail | ADR-0039, I5 |
 
 L2 is the heart of the specification. It is the rule that makes summary
 chaining impossible to introduce without the linter rejecting it. L10 keeps a

@@ -532,6 +532,9 @@ def drift_worklist(root, project=None, all=False):
             continue
         if origin.get("recoverable") is not True:
             continue
+        cur_entry = next((e for e in (d.data.get("history") or [])
+                          if isinstance(e, dict)
+                          and e.get("version") == d.data.get("version")), {})
         out.append({
             "id": d.id,
             "origin_system": system,
@@ -539,6 +542,12 @@ def drift_worklist(root, project=None, all=False):
             "tier": d.data.get("capture", "full"),
             "version": d.data.get("version", 1),
             "captured_at": str(d.data.get("captured_at") or ""),
+            # ADR-0039 anchor columns: the whole an excerpt was read from + its
+            # identity as of that read. Identity present → the sweep's tier-1
+            # comparison is exact (git-blob even needs no content fetch); absent
+            # → the source is checked the pre-anchor way, hedged honestly.
+            "upstream_ref": origin.get("upstream_ref"),
+            "upstream_identity": cur_entry.get("upstream_identity"),
         })
     out.sort(key=lambda w: w["id"])
     return out

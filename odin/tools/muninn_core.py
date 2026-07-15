@@ -44,14 +44,18 @@ from muninn.usage import (  # noqa: E402,F401
     usage_log,
 )
 from muninn.capture import (  # noqa: E402,F401
+    anchor,
+    anchor_check,
     capture,
     capture_file,
     _capture,
     capture_repo,
+    containment_report,
     dedup_check,
     log_drift_check,
     retier,
     source_status,
+    upstream_identity_of,
 )
 from muninn.derive import (  # noqa: E402,F401
     relink,

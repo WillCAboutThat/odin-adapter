@@ -2,6 +2,7 @@
 
 Split from muninn_core.py (T-122); muninn_core remains the facade.
 """
+import hashlib
 import shutil
 import sys
 from pathlib import Path
@@ -12,32 +13,41 @@ import extractors  # noqa: E402  (the document-processing extension point, ADR-0
 import repo_constitution  # noqa: E402  (constitution enumerator, ADR-0028)
 from muninn_lint import (  # noqa: E402  (shared model + hashing)
     TEXT_SUFFIXES,
+    UPSTREAM_IDENTITY_RE,
     content_hash_of_canonical,
     current_canonical,
+    split_frontmatter,
 )
 from . import snapshot, util  # noqa: E402  (module-attr access = the patch point)
 from .util import _append_log, _dump_yaml, _load_yaml, _locked, _valid_id  # noqa: E402
 
 
 def capture(root, id, body, *, origin, tier="full", capture_reason=None,
-            when=None, force_new=False):
+            when=None, force_new=False, upstream_identity=None):
     """Capture a **text** source (backward-compatible entry point).
 
     A text source's canonical bytes are the UTF-8 of `body`; the canonical file is
     `source.md` and no separate text aid is written (it *is* the text). For binary
     sources (PDF, images, …) use `capture_file`.
+
+    A **partial capture** (an excerpt of a larger upstream whole, ADR-0039)
+    declares the whole via `origin['upstream_ref']` and may anchor this read
+    with `upstream_identity` — the whole's content identity as of the read
+    (`git-blob:<sha1>` | `sha256:<hex64>`), recorded per-version in history.
     """
     if not isinstance(body, str):
         raise ValueError("body must be a string")
     when = when or util._now()
     return _capture(root, id, raw=body.encode("utf-8"), canonical_name="source.md",
                     origin=origin, tier=tier, capture_reason=capture_reason,
-                    when=when, text=None, extracted_by=None, force_new=force_new)
+                    when=when, text=None, extracted_by=None, force_new=force_new,
+                    upstream_identity=upstream_identity)
 
 
 def capture_file(root, id, raw, filename, *, origin, tier="full",
                  capture_reason=None, when=None,
-                 text=None, extracted_by=None, force_new=False):
+                 text=None, extracted_by=None, force_new=False,
+                 upstream_identity=None):
     """Capture a source from its **original bytes** (ADR-0010).
 
     The canonical source of record is `raw`, stored as `source<ext>` where `<ext>`
@@ -75,7 +85,7 @@ def capture_file(root, id, raw, filename, *, origin, tier="full",
     res = _capture(root, id, raw=raw, canonical_name=canonical_name,
                    origin=origin, tier=tier, capture_reason=capture_reason,
                    when=when, text=text, extracted_by=extracted_by,
-                   force_new=force_new)
+                   force_new=force_new, upstream_identity=upstream_identity)
     if extraction_error and res.get("action") != "deduped":
         _append_log(Path(root), when,
                     f"capture | extraction-failed | {res['id']} ({extraction_error}) "
@@ -86,7 +96,7 @@ def capture_file(root, id, raw, filename, *, origin, tier="full",
 
 @_locked
 def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
-             when, text, extracted_by, force_new=False):
+             when, text, extracted_by, force_new=False, upstream_identity=None):
     """Shared capture engine — hash-first dedup, immutable write, versioning.
 
     Contract (validated by tests/test_core_capture*.py, test_capture_lineage.py):
@@ -118,6 +128,16 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
         raise ValueError(f"tier must be 'full' or 'reference', got {tier!r}")
     if tier == "reference" and not capture_reason:
         raise ValueError("reference capture requires a capture_reason (ADR-0003)")
+    # Upstream anchor (ADR-0039): the identity names WHAT was read of WHERE, so
+    # it is meaningless without the whole's locator; form is the shared authority
+    # the linter's L20 also applies — write boundary and lint agree by construction.
+    if upstream_identity is not None:
+        if not (origin or {}).get("upstream_ref"):
+            raise ValueError("upstream_identity requires origin upstream_ref — "
+                             "the whole this partial capture was read from (ADR-0039)")
+        if not UPSTREAM_IDENTITY_RE.match(str(upstream_identity)):
+            raise ValueError(f"upstream_identity '{upstream_identity}' has no known "
+                             f"form (git-blob:<sha1> | sha256:<hex64>; ADR-0039)")
 
     # Hash via the SAME rule `lint` applies to the canonical (muninn_lint.
     # content_hash_of_canonical): text by normalized body, binary by raw bytes —
@@ -245,6 +265,8 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
         if aid_name:
             new_entry["text_aid"] = aid_name
             new_entry["extracted_by"] = extracted_by
+        if upstream_identity is not None:
+            new_entry["upstream_identity"] = upstream_identity
         meta.setdefault("history", []).append(new_entry)
         tmp_canon = sdir / f".{canonical_name}.tmp"
         tmp_canon.write_bytes(raw)
@@ -290,6 +312,8 @@ def _capture(root, id, *, raw, canonical_name, origin, tier, capture_reason,
     if aid_name:
         entry["text_aid"] = aid_name
         entry["extracted_by"] = extracted_by
+    if upstream_identity is not None:
+        entry["upstream_identity"] = upstream_identity
     meta["history"] = [entry]
     (tmp / "meta.yml").write_text(_dump_yaml(meta), encoding="utf-8")
     tmp.rename(sdir)  # single atomic move into place
@@ -536,3 +560,223 @@ def log_drift_check(root, *, same=0, changed=0, unreachable=0, detail=None):
     _append_log(root, when, line)
     return {"logged_at": when, "same": int(same), "changed": int(changed),
             "unreachable": int(unreachable)}
+
+
+# --------------------------------------------------------------------------- #
+# Upstream anchors for partial captures (ADR-0039, T-138)
+# --------------------------------------------------------------------------- #
+def _lf(text: str) -> str:
+    """The T-013 line-ending canonicalization, applied to comparison text."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _git_blob_sha1(raw: bytes) -> str:
+    h = hashlib.sha1(b"blob %d\x00" % len(raw))
+    h.update(raw)
+    return h.hexdigest()
+
+
+def upstream_identity_of(raw: bytes, form: str = "sha256") -> str:
+    """The form-tagged content identity of a fetched upstream whole (ADR-0039).
+
+    `git-blob` is git's own object hash — what a remote reports without a
+    content fetch; `sha256` is connector-neutral. Both are computed over the
+    RAW fetched bytes: identity is opaque equality, never normalized.
+    """
+    if form == "git-blob":
+        return "git-blob:" + _git_blob_sha1(raw)
+    if form == "sha256":
+        return "sha256:" + hashlib.sha256(raw).hexdigest()
+    raise ValueError(f"unknown identity form {form!r} (git-blob | sha256)")
+
+
+def excerpt_chunks(body: str) -> list[str]:
+    """The excerpt's verbatim chunks, deterministically (ADR-0039).
+
+    When the body carries fenced blocks, the chunks are the fence CONTENTS —
+    excerpted verbatim content lives in fences by convention (SKILL), and the
+    disclosure prose around them ("excerpt of …; omitted: …") is the capture
+    talking, not upstream content. With no fences, the whole body is one chunk.
+    A faithful parse (fences are unambiguous structure), never a judgment about
+    which region "matters".
+    """
+    lines = _lf(body).split("\n")
+    chunks: list[str] = []
+    cur: list[str] = []
+    fence = None
+    for ln in lines:
+        stripped = ln.lstrip()
+        if fence is None and (stripped.startswith("```") or stripped.startswith("~~~")):
+            fence = stripped[:3]
+            cur = []
+            continue
+        if fence is not None and stripped.startswith(fence):
+            chunks.append("\n".join(cur).strip("\n"))
+            fence = None
+            continue
+        if fence is not None:
+            cur.append(ln)
+    if fence is not None:  # unterminated fence: keep what it held
+        chunks.append("\n".join(cur).strip("\n"))
+    chunks = [c for c in chunks if c.strip()]
+    if chunks:
+        return chunks
+    whole = _lf(body).strip("\n")
+    return [whole] if whole.strip() else []
+
+
+def containment_report(excerpt_body: str, upstream_text: str) -> dict:
+    """Do the excerpt's chunks still appear in the fetched upstream? (ADR-0039)
+
+    Byte-equality over LF-canonicalized text on BOTH sides (the same T-013
+    posture capture and lint hash by); a leading BOM on the fetched side is
+    stripped (a transport artifact, not content). Deliberately NO whitespace
+    normalization and NO fuzzy matching — an upstream reformat honestly fails
+    containment and falls through to adapter judgment. Faithful transform:
+    grep-grade, cannot fabricate.
+    """
+    hay = _lf(upstream_text)
+    if hay.startswith("﻿"):
+        hay = hay[1:]
+    chunks = excerpt_chunks(excerpt_body)
+    missing = [c for c in chunks if c not in hay]
+    return {"chunks": len(chunks), "found": len(chunks) - len(missing),
+            "contained": bool(chunks) and not missing,
+            "missing_preview": [c[:80] for c in missing[:5]]}
+
+
+def _current_entry(meta: dict) -> dict:
+    cur_n = meta.get("version")
+    return next((e for e in meta.get("history") or []
+                 if isinstance(e, dict) and e.get("version") == cur_n), {})
+
+
+def _source_body_text(sdir: Path, meta: dict):
+    """The source's text for containment: frontmatter-stripped body of a
+    text-native canonical, else None (binary excerpts cannot be contained)."""
+    canonical = current_canonical(sdir, meta)
+    if canonical is None or canonical.suffix.lower() not in TEXT_SUFFIXES:
+        return None
+    _, body = split_frontmatter(canonical.read_text(encoding="utf-8", errors="replace"))
+    return body
+
+
+def anchor_check(root, id, *, upstream_file):
+    """The two-tier drift check of one anchored partial capture (ADR-0039).
+
+    Tier 1 — identity, raw: the recorded `upstream_identity` vs the fetched
+    file's identity IN THE RECORDED FORM, opaque equality. Equal → verdict
+    `upstream-unchanged`: everything including the excerpted region is
+    unchanged, byte-certain. Tier 2 — containment, canonical: on mismatch,
+    are the excerpt's chunks still in the fetched whole?  All present →
+    `upstream-changed-region-intact` (an unrelated edit elsewhere never
+    raises a stale flag); any missing → `region-drifted` (surface it; offer
+    re-locate / re-capture-as-version — never silently repair, I5). A source
+    with no anchor on its current version is `unanchored` (today's hedged
+    state, stated plainly). Read-only; the fetch that produced
+    `upstream_file` is the adapter's consented reach (T-136).
+    """
+    root = Path(root)
+    sdir = root / "sources" / id
+    meta_p = sdir / "meta.yml"
+    if not meta_p.exists():
+        raise ValueError(f"no such source: {id}")
+    meta = _load_yaml(meta_p)
+    entry = _current_entry(meta)
+    recorded = entry.get("upstream_identity")
+    out = {"id": id, "version": meta.get("version"),
+           "upstream_ref": (meta.get("origin") or {}).get("upstream_ref"),
+           "recorded_identity": recorded}
+    if not recorded:
+        out.update(verdict="unanchored", current_identity=None)
+        return out
+    raw = Path(upstream_file).read_bytes()
+    form = str(recorded).split(":", 1)[0]
+    current = upstream_identity_of(raw, form)
+    out["current_identity"] = current
+    if current == recorded:
+        out["verdict"] = "upstream-unchanged"
+        return out
+    body = _source_body_text(sdir, meta)
+    if body is None:
+        # a binary excerpt has no text to contain: identity says "changed",
+        # nothing deterministic can say WHERE — adapter judgment from here
+        out.update(verdict="region-uncheckable", chunks=0, found=0,
+                   contained=None, missing_preview=[])
+        return out
+    rep = containment_report(body, raw.decode("utf-8", errors="replace"))
+    out.update(rep)
+    out["verdict"] = ("upstream-changed-region-intact" if rep["contained"]
+                      else "region-drifted")
+    return out
+
+
+def anchor(root, id, *, upstream_ref, upstream_file, form="sha256",
+           force=False, reason=None):
+    """Attach an upstream anchor to an EXISTING partial capture — the consented
+    backfill of ADR-0039 (the relink/stamp precedent: a format addition ships
+    with its migration). Containment runs FIRST and the anchor is stamped only
+    when the held bytes satisfy it; a failure is reported, not stamped. A
+    declared `force` (e.g. the un-contained residue is the capture's own
+    disclosure prose, judged by the owner) requires a reason and is logged.
+    Idempotent: re-anchoring with the same identity + ref changes nothing.
+
+    Writes `origin.upstream_ref` + the current version's `upstream_identity`
+    and `anchored_at` (the anchor's as-of is NOW, not captured_at — it was
+    attached later). Bytes, content_hash, version, and history structure are
+    untouched, so all provenance still verifies unchanged (mirrors `retier`).
+    """
+    if not (upstream_ref or "").strip():
+        raise ValueError("anchor requires upstream_ref — the whole this "
+                         "partial capture was read from (ADR-0039)")
+    root = Path(root)
+    sdir = root / "sources" / id
+    meta_p = sdir / "meta.yml"
+    if not meta_p.exists():
+        raise ValueError(f"no such source: {id}")
+    meta = _load_yaml(meta_p)
+    entry = _current_entry(meta)
+    if not entry:
+        raise ValueError(f"source {id} has no current history entry")
+    raw = Path(upstream_file).read_bytes()
+    identity = upstream_identity_of(raw, form)
+
+    origin = meta.get("origin") or {}
+    if (entry.get("upstream_identity") == identity
+            and origin.get("upstream_ref") == upstream_ref):
+        return {"id": id, "action": "anchored", "changed": False,
+                "upstream_identity": identity}
+
+    body = _source_body_text(sdir, meta)
+    rep = (containment_report(body, raw.decode("utf-8", errors="replace"))
+           if body is not None
+           else {"chunks": 0, "found": 0, "contained": False,
+                 "missing_preview": ["<binary source: containment not applicable>"]})
+    if not rep["contained"]:
+        if not force:
+            raise ValueError(
+                f"anchor refused for '{id}': held excerpt is not contained in the "
+                f"supplied upstream ({rep['found']}/{rep['chunks']} chunks found; "
+                f"missing: {rep['missing_preview']}). An anchor must not claim what "
+                f"the held bytes don't satisfy (ADR-0039) — re-capture-as-version "
+                f"from the current upstream, or pass force with a reason if the "
+                f"missing chunks are judged to be the capture's own commentary.")
+        if not (reason or "").strip():
+            raise ValueError("a forced anchor requires a reason (it is stamping "
+                             "past a failed containment check)")
+
+    when = util._now()
+    origin["upstream_ref"] = upstream_ref
+    meta["origin"] = origin
+    entry["upstream_identity"] = identity
+    entry["anchored_at"] = when
+    tmp = meta_p.with_name(".meta.yml.tmp")
+    tmp.write_text(_dump_yaml(meta), encoding="utf-8")
+    tmp.replace(meta_p)
+    note = (f"forced: {reason}" if not rep["contained"]
+            else f"contained {rep['found']}/{rep['chunks']}")
+    _append_log(root, when, f"anchor | {id}: {upstream_ref} @ {identity} ({note})")
+    res = {"id": id, "action": "anchored", "changed": True,
+           "upstream_identity": identity, "anchored_at": when,
+           "forced": not rep["contained"], **rep}
+    return res

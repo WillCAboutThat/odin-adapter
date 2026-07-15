@@ -195,7 +195,21 @@ disclosure is mandatory and everything derived from it stamps `model-read`.
      disclose the producer of the bytes), and (4) `--derivation model-read` on every
      doc derived from it. Artifacts the item links (an attachment, a supporting
      document) are **their own capture candidates: surface them, never silently
-     drop them** (T-131).
+     drop them** (T-131). **Capturing an EXCERPT of a larger whole (ADR-0039):**
+     when the evidence is a targeted region — one clause of a contract, a section
+     of a wiki page, the relevant method of a repo file — a partial capture is
+     the right middle path (evidence held, no bloat), and it must be **anchored**:
+     (1) put the verbatim excerpted content in **fenced blocks**, disclosure
+     prose outside them (fences are what the containment check verifies — prose
+     inside upstream text is not); (2) give the excerpt a **distinct, qualified
+     `--origin-ref`** (`<whole's locator>#<excerpt-slug>` — two excerpts of one
+     file must never share a ref, T-045); (3) pass **`--upstream-ref <whole's
+     clean locator>`** and, when you can identify the whole as of this read,
+     **`--upstream-identity git-blob:<sha1>`** (git-backed: `git rev-parse
+     HEAD:<path>` or the API's blob sha, free) **or `sha256:<hex>`** of the
+     fetched whole. An anchored excerpt drift-checks *exactly*; an unanchored
+     one is honestly hedged forever. Pre-existing excerpts are anchored later
+     with the consented **`anchor`** op (below), never a hand-edit.
    - **The inbox (batch mode):** the user drops files into the Muninn's `inbox/`
      (or you parked explore findings there on their opt-in) and says "ingest the
      inbox." Process **each pending file through this same pipeline** (capture →
@@ -646,11 +660,29 @@ with no connectivity forever, ADR-0008; reaching is Huginn's consented act).
    that project's (T-128); `--all` sweeps every source — **offer `--all` when
    the default comes back thin** (sources in no view are otherwise never swept).
 2. **Reach and compare, per item.** `fetch` the current remote (your connector,
-   one bounded retry on a transient failure), then the **Core compares**:
-   `… dedup-check <root> --source-file <fetched> --id <src-id>` →
-   *already-captured* (same) / *changed*. You never eyeball-diff or hash.
-   A locator-only reference source gets a reachability check; a stand-in-bodied
-   one compares against the stand-in — **say so** when reporting it.
+   one bounded retry on a transient failure), then the **Core compares** — by
+   the strongest rung the source carries:
+   - **Anchored partial capture** (`upstream_ref`/`upstream_identity` in the
+     worklist row, ADR-0039): for a `git-blob` identity, compare the remote's
+     blob sha first — equal means **byte-certain unchanged, zero fetch**.
+     Otherwise fetch the whole and run `… anchor-check <root> <src-id>
+     --upstream-file <fetched>` → `upstream-unchanged` /
+     `upstream-changed-region-intact` (the whole moved but the excerpted region
+     stands — report it as *current*, not changed) / `region-drifted` (the
+     region itself moved → the *changed* column, offer re-capture). You never
+     eyeball-diff.
+   - **Whole-source capture:** `… dedup-check <root> --source-file <fetched>
+     --id <src-id>` → *already-captured* (same) / *changed*. You never hash.
+   - A locator-only reference source gets a reachability check; a
+     stand-in-bodied one compares against the stand-in — **say so** when
+     reporting it. An **unanchored excerpt** (partial capture, no identity)
+     is the hedged case: report honestly that only prose relates it to its
+     whole, and **offer the `anchor` backfill** — fetch the whole, then
+     `… anchor <root> <src-id> --upstream-ref <whole> --upstream-file
+     <fetched> [--form git-blob]`; the Core verifies containment FIRST and
+     refuses to stamp what the held bytes don't satisfy (a refusal listing
+     missing chunks that are your own disclosure prose may be overruled with
+     `--force --reason …` — the owner's judgment, logged).
 3. **Report the sweep**: one table — **same / changed / unreachable** — then
    record it: `… drift-log <root> --same N --changed M --unreachable K
    [--detail …]`. The log is the sweep's memory (`status` reads it for the

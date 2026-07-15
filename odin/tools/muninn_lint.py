@@ -36,6 +36,14 @@ DECISION_STATUS_VALUES = {"proposed", "accepted"}  # §5.5 / ADR-0019 (L17)
 # is mostly findability facets, not restated content, and may legitimately run longer.
 SUMMARY_COMPRESS_FLOOR = 500
 
+# Upstream-anchor identity forms (ADR-0039, L20-opt-in). A partial capture's
+# per-version `upstream_identity` names the WHOLE it was excerpted from, as a
+# form-tagged content identity: git's own blob hash (comparable against a
+# remote with no content fetch) or a plain SHA-256 of the fetched whole. The
+# single authority shared by `capture`/`anchor` (write boundary) and the
+# linter, so the two can never disagree about what a well-formed anchor is.
+UPSTREAM_IDENTITY_RE = re.compile(r"^(git-blob:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")
+
 # Assurance ranking of a derivation, strongest (closest to deterministic ground)
 # first. `ask` rolls the *weakest* rung among the docs it cites into one
 # user-facing integrity line (ADR-0011 weakest-link; SKILLS §5 `ask`). Absent =
@@ -238,6 +246,9 @@ class Linter:
         # (`integrity.derived_self_hash: true`). Default off so it never churns a base
         # that didn't ask for it (ADR-0029 §4). Set in _load_manifest.
         self._self_hash_enabled = False
+        # L20 opt-in: upstream-anchor coherence for partial captures
+        # (`integrity.upstream_anchors: true`, ADR-0039). Same posture as L19.
+        self._anchors_enabled = False
 
     # -- reporting ---------------------------------------------------------- #
     def error(self, rule, msg, path):
@@ -273,7 +284,9 @@ class Linter:
         data = yaml.safe_load(mpath.read_text(encoding="utf-8")) or {}
         if "muninn" not in data:
             self.error("L12", "muninn.yml missing required 'muninn:' format version", mpath)
-        self._self_hash_enabled = bool((data.get("integrity") or {}).get("derived_self_hash"))
+        integrity = data.get("integrity") or {}
+        self._self_hash_enabled = bool(integrity.get("derived_self_hash"))
+        self._anchors_enabled = bool(integrity.get("upstream_anchors"))
         self.docs.append(Doc(id="__manifest__", type="manifest", kind="manifest", path=mpath, data=data))
 
     def _load_sources(self):
@@ -359,6 +372,37 @@ class Linter:
             self.error("L13", f"history references missing text aid '{f}'", d.path)
         for f in set(aid_disk) - ledger_aids:
             self.error("L13", f"text aid '{f}' not covered by history ledger", d.path)
+
+        # L20 anchor-coherence (opt-in, ADR-0039). A partial capture declares
+        # the whole it excerpts via `origin.upstream_ref`; each version may
+        # carry `upstream_identity` (the whole's content identity as of that
+        # read) + `anchored_at` (only when attached later, by the `anchor`
+        # backfill). Off by default: absence of every anchor field is always
+        # legal (pre-ADR-0039 bases are simply "undeclared", never wrong).
+        if self._anchors_enabled:
+            origin = d.data.get("origin") or {}
+            uref = origin.get("upstream_ref")
+            cur_n = d.data.get("version")
+            for e in history:
+                ui = e.get("upstream_identity")
+                if ui is not None and not UPSTREAM_IDENTITY_RE.match(str(ui)):
+                    self.error("L20", f"v{e.get('version')} upstream_identity "
+                                      f"'{ui}' has no known form "
+                                      f"(git-blob:<sha1> | sha256:<hex64>)", d.path)
+                if ui is not None and not uref:
+                    self.error("L20", f"v{e.get('version')} has upstream_identity "
+                                      f"but origin.upstream_ref is missing "
+                                      f"(an anchor names WHAT changed of WHERE)", d.path)
+                if e.get("anchored_at") and ui is None:
+                    self.error("L20", f"v{e.get('version')} has anchored_at but "
+                                      f"no upstream_identity", d.path)
+            if uref:
+                cur_e = next((e for e in history if e.get("version") == cur_n), None)
+                if cur_e is None or cur_e.get("upstream_identity") is None:
+                    self.error("L20", "declared partial capture (origin."
+                                      "upstream_ref) is unanchored at its current "
+                                      "version — run `anchor` to attach the "
+                                      "upstream identity", d.path)
 
     def _check_derived(self, d: Doc):
         self._require(d, ["id", "type", "title", "sources", "derived_at", "status"])
