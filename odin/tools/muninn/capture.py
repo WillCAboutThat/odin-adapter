@@ -577,21 +577,48 @@ def retier(root, id, tier=None, *, reason=None, recoverable=None):
             "recoverable": origin.get("recoverable"), "changed": True}
 
 
-def log_drift_check(root, *, same=0, changed=0, unreachable=0, detail=None):
+def log_drift_check(root, *, same=None, changed=None, unreachable=None,
+                    detail=None, checked=None):
     """Record a completed drift-check sweep in the append-only ADR-0005 log
     (T-136). The log is the sweep's memory: `status` reads the latest entry for
     its quiet "world last checked" line, and the adapter reads recent entries to
     voice unreachable STREAKS ("3rd consecutive sweep") before offering the
     never-retry flip. Deliberately durable-log, not disposable-index: a sweep is
-    a deliberate act worth remembering, like a lint."""
+    a deliberate act worth remembering, like a lint.
+
+    `checked` (T-145) carries the per-item verdicts — `["src-x=same",
+    "src-y=changed", …]` — appended as a parseable `checked:` segment that
+    `drift-worklist` joins back as each item's last-checked/last-verdict. The
+    aggregate counts can't say WHICH items a sweep covered; this segment can,
+    and it is what makes per-item ages reconstructible when sweeps have
+    differing scopes. When the counts are omitted they are tallied from the
+    verdicts (a `same-*` variant — e.g. dedup's same-after-newline-normalization
+    — tallies as same)."""
     root = Path(root)
-    line = f"drift-check | same={int(same)} changed={int(changed)} unreachable={int(unreachable)}"
+    pairs = []
+    for c in (checked or []):
+        c = str(c).strip()
+        if "=" not in c or any(ch in c for ch in ", |"):
+            raise ValueError(f"checked entry {c!r}: use <id>=<verdict> "
+                             "(no spaces, commas, or pipes)")
+        pairs.append(c)
+    if pairs and same is None and changed is None and unreachable is None:
+        verdicts = [p.split("=", 1)[1] for p in pairs]
+        same = sum(1 for v in verdicts if v == "same" or v.startswith("same-"))
+        changed = sum(1 for v in verdicts if v == "changed")
+        unreachable = sum(1 for v in verdicts if v == "unreachable")
+    same = int(same or 0)
+    changed = int(changed or 0)
+    unreachable = int(unreachable or 0)
+    line = f"drift-check | same={same} changed={changed} unreachable={unreachable}"
+    if pairs:
+        line += f" | checked: {', '.join(pairs)}"
     if detail:
         line += f" | {detail}"
     when = util._now()
     _append_log(root, when, line)
-    return {"logged_at": when, "same": int(same), "changed": int(changed),
-            "unreachable": int(unreachable)}
+    return {"logged_at": when, "same": same, "changed": changed,
+            "unreachable": unreachable, "checked": pairs}
 
 
 # --------------------------------------------------------------------------- #

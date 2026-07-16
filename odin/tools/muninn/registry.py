@@ -123,6 +123,21 @@ def _show_find(res):
     print(f"({res['count']} match(es))")
 
 
+def _show_drift_worklist(r):
+    """The T-145 'screen': one line per item, oldest contact first, and the
+    scope disclosure the empty case must never lose (T-147)."""
+    for it in r["items"]:
+        when = it["last_checked"] or "never-checked"
+        verdict = f" ({it['last_verdict']})" if it.get("last_verdict") else ""
+        print(f"{it['id']}  {it['origin_system']}  tier={it['tier']}  "
+              f"captured={it['captured_at']}  last-checked={when}{verdict}")
+    tail = (f"({r['in_scope']} in scope [{r['scope']}]; "
+            f"{r['outside_scope']} eligible outside scope")
+    if r.get("age_filtered"):
+        tail += f"; {r['age_filtered']} newer than the older-than cutoff"
+    print(tail + ")")
+
+
 def _show_resolve(r):
     for mid in r["members"]:
         print(mid)
@@ -369,22 +384,35 @@ OPS = {
                 "drift-check sweep (T-136)",
         "description": "The drift-check sweep's deterministic worklist: "
                        "recoverable, connector-origin sources (local file/chat/"
-                       "inbox never drift remotely). Default scope is the global "
-                       "view's members; `project` unions that project's members "
-                       "(T-128 semantics); `all` sweeps every source. Read-only: "
-                       "the fetch/compare/re-capture that follow are adapter "
-                       "orchestration over fetch + dedup-check + capture, always "
-                       "consented, never a daemon.",
+                       "inbox never drift remotely). Default scope is EVERY "
+                       "eligible source in the base (T-147); `project` narrows "
+                       "to that project's members plus the global views (T-128). "
+                       "The result always discloses `outside_scope` — eligible "
+                       "sources the requested scope excluded — so a thin list "
+                       "never reads as 'all current'. Items carry last_checked/"
+                       "last_verdict joined from the drift log and sort oldest "
+                       "contact first (T-145); `older_than` (e.g. '30d') keeps "
+                       "only items due a check, counting what it drops in "
+                       "`age_filtered`. Read-only: the fetch/compare/re-capture "
+                       "that follow are adapter orchestration over fetch + "
+                       "dedup-check + capture, always consented, never a daemon.",
         "params": {"root": _ROOT_P,
                    "project": {"type": "string",
-                               "description": "Project id to union with the "
-                                              "global scope."},
+                               "description": "Narrow to this project's members "
+                                              "∪ the global views (T-128)."},
+                   "older_than": {"type": "string",
+                                  "description": "Keep only items whose last "
+                                                 "contact (capture or check) is "
+                                                 "older than this — <N>[d|w|h], "
+                                                 "e.g. '30d'. The budget lever.",
+                                  "cli": {"flag": "--older-than"}},
                    "all": {"type": "boolean",
-                           "description": "Sweep every source in the base "
-                                          "(sources in no view are otherwise "
-                                          "never swept)."}},
+                           "description": "Deprecated no-op (T-147): the full "
+                                          "sweep is now the default."}},
         "handler": lambda root, p: drift_worklist(root, project=p.get("project"),
-                                                  all=bool(p.get("all"))),
+                                                  all=bool(p.get("all")),
+                                                  older_than=p.get("older_than")),
+        "presenter": _show_drift_worklist,
     },
     "drift-log": {
         "help": "record a completed drift-check sweep in the append-only log "
@@ -393,18 +421,31 @@ OPS = {
                        "counts + optional detail) to log.md — status reads the "
                        "latest entry for its quiet 'world last checked' line, and "
                        "the adapter reads recent entries to voice unreachable "
-                       "streaks before offering the never-retry flip.",
+                       "streaks before offering the never-retry flip. Pass "
+                       "`checked` with one <id>=<verdict> per item swept (T-145) "
+                       "— it is what makes per-item last-checked ages "
+                       "reconstructible; counts are tallied from it when omitted.",
         "params": {"root": _ROOT_P,
-                   "same": {"type": "integer", "description": "Unchanged count."},
-                   "changed": {"type": "integer", "description": "Changed count."},
+                   "same": {"type": "integer", "description": "Unchanged count "
+                            "(tallied from `checked` when omitted)."},
+                   "changed": {"type": "integer", "description": "Changed count "
+                               "(tallied from `checked` when omitted)."},
                    "unreachable": {"type": "integer",
-                                   "description": "Unreachable count."},
+                                   "description": "Unreachable count (tallied "
+                                                  "from `checked` when omitted)."},
+                   "checked": {"type": "array", "items": {"type": "string"},
+                               "description": "Per-item verdicts, one "
+                                              "<id>=<verdict> each (same | "
+                                              "changed | unreachable | a same-* "
+                                              "variant), e.g. 'src-x=same'.",
+                               "cli": {"flag": "--checked", "append": True}},
                    "detail": {"type": "string",
                               "description": "Optional ids/notes, e.g. "
                                              "'unreachable: src-x (2nd consecutive)'."}},
         "handler": lambda root, p: log_drift_check(
-            root, same=p.get("same") or 0, changed=p.get("changed") or 0,
-            unreachable=p.get("unreachable") or 0, detail=p.get("detail")),
+            root, same=p.get("same"), changed=p.get("changed"),
+            unreachable=p.get("unreachable"), detail=p.get("detail"),
+            checked=p.get("checked")),
     },
     "derive": {
         "help": "write a derived doc (body from --file or stdin)",
@@ -799,9 +840,15 @@ OPS = {
     "find": {
         "help": "retrieve docs matching a query (deterministic; the AI-free floor)",
         "description": "Deterministic retrieval: docs whose id/title/abstract/"
-                       "tags/body contain ALL query terms (case-insensitive). The "
-                       "AI-free floor (ADR-0014) — no embeddings, no AI. Optional "
-                       "`type` restricts results (type='decision' is the `why` verb).",
+                       "tags/body contain ALL query terms (case-insensitive); "
+                       "sources also match their origin locators (origin.ref / "
+                       "upstream_ref — T-141), so a captured filename or URL is "
+                       "a valid query. The AI-free floor (ADR-0014) — no "
+                       "embeddings, no AI. Optional `type` restricts results "
+                       "(type='decision' is the `why` verb). A zero-hit means "
+                       "these literal terms don't appear — never 'not in the "
+                       "base'; degrade the query or check the index before "
+                       "reporting absence (T-142).",
         "params": {
             "root": _ROOT_P,
             "query": {"type": "string", "required": True,
@@ -829,7 +876,9 @@ OPS = {
                        "folder (ADR-0002/0017). Members are links, not provenance. "
                        "The body is a deterministic projection of each member's "
                        "own title/abstract. Only group when the user asks — never "
-                       "auto-group.",
+                       "auto-group. `remove_members` takes ids OUT of the view "
+                       "(T-148): links only — the doc itself is untouched and "
+                       "stays findable; never hand-edit a members list.",
         "params": {
             "root": _ROOT_P,
             "id": {"type": "string", "description": "Stable project id.",
@@ -839,6 +888,12 @@ OPS = {
             "add_members": {"type": "array", "items": {"type": "string"},
                             "description": "Member ids to union in (order-stable).",
                             "cli": {"flag": "--member", "append": True}},
+            "remove_members": {"type": "array", "items": {"type": "string"},
+                               "description": "Member ids to remove from the view "
+                                              "(idempotent — an absent id is a "
+                                              "no-op; applied after any adds). "
+                                              "Removal is a link change only.",
+                               "cli": {"flag": "--remove-member", "append": True}},
             "scope": {"type": "string", "enum": ["global", "project"],
                       "description": "'global' views are always unioned into every "
                                      "scope."},
@@ -851,6 +906,7 @@ OPS = {
         },
         "handler": lambda root, p: write_project(
             root, p["id"], title=p.get("title"), add_members=p.get("add_members"),
+            remove_members=p.get("remove_members"),
             scope=p.get("scope"), description=p.get("description"),
             maintained_by=p.get("maintained_by"), tags=p.get("tags"), when=util._now()),
     },

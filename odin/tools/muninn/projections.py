@@ -2,7 +2,9 @@
 
 Split from muninn_core.py (T-122); muninn_core remains the facade.
 """
+import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -167,8 +169,12 @@ def fingerprint(root):
 # --------------------------------------------------------------------------- #
 def find(root, query, type=None, include_superseded=False):
     """Return docs whose id/title/abstract/tags/body contain ALL whitespace-
-    separated query terms (case-insensitive). Sources first, then derived, then
-    projects/decisions, each by id. Returns [{id, kind, type, title, path}].
+    separated query terms (case-insensitive). Sources also match their **origin
+    locators** (`origin.ref`, `origin.upstream_ref`) — "what did I capture from
+    <filename/URL>?" is a retrieval handle (T-141), the same identity handle
+    capture's lineage rung and dedup-check already match on (T-045). Sources
+    first, then derived, then projects/decisions, each by id.
+    Returns [{id, kind, type, title, path}].
 
     `type` (optional) restricts results to docs of that frontmatter type — e.g.
     `type="decision"` is the retrieval half of the `why` verb (SPEC §5.5). An empty
@@ -195,6 +201,13 @@ def find(root, query, type=None, include_superseded=False):
             if d.data.get(k):
                 parts.append(str(d.data[k]))
         parts += [str(t) for t in (d.data.get("tags") or [])]
+        if d.kind == "source":
+            # Origin locators are retrieval handles, not just provenance (T-141):
+            # a query shaped like the captured filename/URL must hit even when
+            # the summary's vocabulary never repeats it.
+            origin = d.data.get("origin") or {}
+            parts += [str(origin[k]) for k in ("ref", "upstream_ref")
+                      if origin.get(k)]
         try:
             # A source's searchable text is its aid/canonical text (ADR-0010) —
             # NOT a hardcoded source.md, which binary sources don't have.
@@ -272,18 +285,22 @@ def _render_project_body(root, members, description=None, this_id=None, scope="p
 
 
 @_locked
-def write_project(root, id, *, title=None, add_members=None, scope=None,
-                  description=None, maintained_by=None, tags=None, when=None):
+def write_project(root, id, *, title=None, add_members=None, remove_members=None,
+                  scope=None, description=None, maintained_by=None, tags=None,
+                  when=None):
     """Create or update a project page — a curated VIEW (ADR-0002, ADR-0017).
 
     Members are *links, not provenance*: this cannot reuse `write_derived` (that
     path demands ≥1 source + hashes). `add_members` are unioned into any existing
-    members (order-stable); `title`/`scope`/`description`/`maintained_by`/`tags`
-    update in place, falling back to the existing page's values. The body is a
+    members (order-stable); `remove_members` are then subtracted (T-148 — the
+    inverse of the union; SPEC §5.6 "reorganizable at will"): links only, the
+    member doc itself is untouched and stays findable, and removing an absent id
+    is a no-op. `title`/`scope`/`description`/`maintained_by`/`tags` update in
+    place, falling back to the existing page's values. The body is a
     deterministic projection of each member's own title/abstract (the skim
     surface) — no authored prose. Atomic single-file write, idempotent.
 
-    Returns {"id", "type", "path", "members", "scope"}.
+    Returns {"id", "type", "path", "members", "removed", "scope"}.
     """
     root = Path(root)
     when = when or util._now()
@@ -303,6 +320,11 @@ def write_project(root, id, *, title=None, add_members=None, scope=None,
     for m in (add_members or []):
         if m not in members:
             members.append(m)
+    removed = []
+    if remove_members:
+        drop = set(remove_members)
+        removed = [m for m in members if m in drop]
+        members = [m for m in members if m not in drop]
 
     scope = scope or existing.get("scope") or "project"
     if scope not in muninn_lint.SCOPE_VALUES:
@@ -331,9 +353,12 @@ def write_project(root, id, *, title=None, add_members=None, scope=None,
     tmp = ppath.parent / f".{id}.md.tmp"
     tmp.write_text(doc_text, encoding="utf-8")
     tmp.replace(ppath)  # atomic replace into place
-    _append_log(root, when, f"project | {id} <- {', '.join(members) or '(empty)'}")
+    line = f"project | {id} <- {', '.join(members) or '(empty)'}"
+    if removed:
+        line += f" (removed: {', '.join(removed)})"
+    _append_log(root, when, line)
     return {"id": id, "type": "project", "path": str(ppath),
-            "members": members, "scope": scope}
+            "members": members, "removed": removed, "scope": scope}
 
 
 @_locked
@@ -493,78 +518,150 @@ def connector_projection(root, project=None):
     return out
 
 
-def drift_worklist(root, project=None, all=False):
+def _parse_older_than(spec):
+    """'30d' / '2w' / '12h' / bare number (days) → timedelta (T-145)."""
+    s = str(spec).strip().lower()
+    unit = "d"
+    if s and s[-1] in ("d", "w", "h"):
+        unit, s = s[-1], s[:-1]
+    try:
+        n = float(s)
+    except ValueError:
+        raise ValueError(f"older_than {spec!r}: use <N>[d|w|h], e.g. 30d")
+    return timedelta(hours=n * {"h": 1, "d": 24, "w": 168}[unit])
+
+
+def _last_checked_map(root):
+    """id → (timestamp, verdict) from the newest drift-check log entry naming the
+    id (T-145). The aggregate counts can't carry per-item memory; the `checked:`
+    segment can, and file order is chronological so later entries win."""
+    logp = Path(root) / "log.md"
+    out = {}
+    if not logp.exists():
+        return out
+    for m in re.finditer(
+            r"^## \[([^\]]+)\] drift-check \|[^\n]*?checked: ([^|\n]+)",
+            logp.read_text(encoding="utf-8"), re.MULTILINE):
+        when, pairs = m.group(1), m.group(2)
+        for pair in pairs.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                sid, verdict = pair.split("=", 1)
+                out[sid.strip()] = (when, verdict.strip())
+    return out
+
+
+def drift_worklist(root, project=None, all=False, older_than=None):
     """The deterministic worklist for the consented **drift-check** sweep (T-136):
     the recoverable, connector-origin sources whose remote system may have moved.
     Hash staleness (L4) measures the base against itself; currency with the WORLD
     costs a deliberate reach, and this op names exactly what is worth reaching for.
 
-    Scope: default is the **global view's members** (the always-in-scope world);
-    `project` unions that project's members (T-128 semantics); `all=True` sweeps
-    every source in the base (a source that is a member of no view is otherwise
-    never swept). Local origins (`file`, `chat`, `inbox`) never drift remotely and
-    are excluded. `recoverable` must be True — False is the standing never-retry
-    mark (flip it back with `retier --recoverable true` when a system returns),
-    and unset means the capture never claimed re-fetchability.
+    Scope (T-147): default is **every eligible source in the base** — view
+    membership was never designed to scope drift, and a well-curated landscape
+    global (ADR-0021/0028) holds no sweepable sources at all, so the old
+    global-members default went empty precisely on well-formed bases. `project`
+    NARROWS to that project's members ∪ the global views (T-128 semantics kept);
+    `all` is accepted as a no-op for back-compat. Whatever the scope, the result
+    **always discloses `outside_scope`** — eligible sources the requested scope
+    excluded — so a thin or empty list can never silently read as "all current"
+    (the T-142 discipline in a Core return value). Local origins (`file`, `chat`,
+    `inbox`) never drift remotely and are excluded everywhere. `recoverable` must
+    be True — False is the standing never-retry mark (flip it back with `retier
+    --recoverable true`), and unset means the capture never claimed
+    re-fetchability.
 
-    Returns `[{id, origin_system, origin_ref, tier, version, captured_at}]`,
-    sorted by id. Read-only; the fetch/compare/re-capture that follow are the
-    adapter's consented orchestration over `fetch` + `dedup-check` + `capture`.
+    Each item carries its per-item memory (T-145): `last_checked`/`last_verdict`
+    joined from the drift log's `checked:` segments, and `last_contact` =
+    max(captured_at, last_checked) — a re-capture IS contact with the world.
+    Items sort **oldest contact first**. `older_than` ('30d', '2w', '12h')
+    keeps only items whose last contact is older than the cutoff; what it drops
+    is counted in `age_filtered`, never silently (no silent caps).
+
+    Returns `{"items": [{id, origin_system, origin_ref, tier, version,
+    captured_at, upstream_ref, upstream_identity, last_checked, last_verdict,
+    last_contact}], "scope", "in_scope", "outside_scope", "age_filtered"}`.
+    Read-only; the fetch/compare/re-capture that follow are the adapter's
+    consented orchestration over `fetch` + `dedup-check` + `capture`.
     """
     root = Path(root)
     linter = Linter(root)
     linter.load()
     by_id = {d.id: d for d in linter.docs}
 
-    if all:
-        candidates = [d for d in linter.docs if d.kind == "source"]
-    else:
-        members: list[str] = []
-        for d in linter.docs:
-            if d.kind == "project" and d.data.get("scope") == "global":
-                for m in (d.data.get("members") or []):
-                    if m not in members:
-                        members.append(m)
-        if project is not None:
-            pdoc = by_id.get(project)
-            if pdoc is None or pdoc.kind != "project":
-                raise ValueError(f"no such project: {project}")
-            for m in (pdoc.data.get("members") or []):
-                if m not in members:
-                    members.append(m)
-        candidates = [by_id[m] for m in members
-                      if m in by_id and by_id[m].kind == "source"]
-
-    out = []
-    for d in candidates:
+    def _eligible(d):
+        if d.kind != "source":
+            return False
         origin = d.data.get("origin") or {}
         system = origin.get("system")
         if not system or system in _LOCAL_ORIGINS or system == "inbox":
-            continue
+            return False
         # Two gates admit a source to the sweep (T-140d): `recoverable: true`
         # (the SOURCE's own bytes re-fetch via origin.ref) OR an upstream anchor
         # (ADR-0039: a partial capture's sweep fetches the WHOLE via
         # upstream_ref — which the anchor itself proves fetchable; recoverable
         # was the wrong gate for this class and dropped anchored excerpts from
         # the first live sweep).
-        if origin.get("recoverable") is not True and not origin.get("upstream_ref"):
-            continue
+        return origin.get("recoverable") is True or bool(origin.get("upstream_ref"))
+
+    eligible = [d for d in linter.docs if _eligible(d)]
+
+    if project is None:
+        candidates, scope_label = eligible, "all"
+    else:
+        pdoc = by_id.get(project)
+        if pdoc is None or pdoc.kind != "project":
+            raise ValueError(f"no such project: {project}")
+        members: list[str] = []
+        for d in linter.docs:
+            if d.kind == "project" and d.data.get("scope") == "global":
+                for m in (d.data.get("members") or []):
+                    if m not in members:
+                        members.append(m)
+        for m in (pdoc.data.get("members") or []):
+            if m not in members:
+                members.append(m)
+        member_set = set(members)
+        candidates = [d for d in eligible if d.id in member_set]
+        scope_label = f"project:{project}"
+    outside_scope = len(eligible) - len(candidates)
+
+    checked = _last_checked_map(root)
+    out = []
+    for d in candidates:
+        origin = d.data.get("origin") or {}
         cur_entry = next((e for e in (d.data.get("history") or [])
                           if isinstance(e, dict)
                           and e.get("version") == d.data.get("version")), {})
+        last_checked, last_verdict = checked.get(d.id, (None, None))
+        captured_at = str(d.data.get("captured_at") or "")
+        last_contact = max(filter(None, (captured_at, last_checked)), default="")
         out.append({
             "id": d.id,
-            "origin_system": system,
+            "origin_system": origin.get("system"),
             "origin_ref": origin.get("ref"),
             "tier": d.data.get("capture", "full"),
             "version": d.data.get("version", 1),
-            "captured_at": str(d.data.get("captured_at") or ""),
+            "captured_at": captured_at,
             # ADR-0039 anchor columns: the whole an excerpt was read from + its
             # identity as of that read. Identity present → the sweep's tier-1
             # comparison is exact (git-blob even needs no content fetch); absent
             # → the source is checked the pre-anchor way, hedged honestly.
             "upstream_ref": origin.get("upstream_ref"),
             "upstream_identity": cur_entry.get("upstream_identity"),
+            "last_checked": last_checked,
+            "last_verdict": last_verdict,
+            "last_contact": last_contact,
         })
-    out.sort(key=lambda w: w["id"])
-    return out
+
+    age_filtered = 0
+    if older_than is not None:
+        cutoff = (datetime.now(timezone.utc)
+                  - _parse_older_than(older_than)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        kept = [w for w in out if w["last_contact"] < cutoff]
+        age_filtered = len(out) - len(kept)
+        out = kept
+
+    out.sort(key=lambda w: (w["last_contact"], w["id"]))
+    return {"items": out, "scope": scope_label, "in_scope": len(out),
+            "outside_scope": outside_scope, "age_filtered": age_filtered}

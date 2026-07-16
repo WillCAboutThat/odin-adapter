@@ -78,6 +78,8 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
       - pending_candidates : count awaiting review (ADR-0033)
       - captures_since_lint: sources captured since the last lint (the synthesize nudge)
       - aged       : {id, as_of, days_old} for `as_of` docs older than the window (T-104)
+      - unmapped_connector_systems : systems the base's sources came from that no
+        global landscape entry covers (T-146 — the retroactive-orientation trigger)
 
     `aged` is empty unless `as_of` (today) is supplied — time only enters here, never lint.
 
@@ -137,6 +139,35 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
         and (d.data.get("origin") or {}).get("system")
         and (d.data.get("origin") or {}).get("recoverable") is True)
 
+    # orientation debt (T-146): systems this base's sources came FROM that the
+    # global landscape doesn't cover — the deterministic trigger for the
+    # retroactive orientation offer. The first-run orientation is init-gated;
+    # without this signal an existing base has no catch-up path (the
+    # opportunistic mid-task offer is a second net, not a guarantee). Coverage
+    # mirrors the connector projection's two grounded inputs over the global
+    # views (ADR-0021 §2/T-070): a global member source's own origin, or a
+    # `connectors:` assertion on a global member doc.
+    base_systems = {(d.data.get("origin") or {}).get("system")
+                    for d in linter.docs if d.kind == "source"}
+    base_systems.discard(None)
+    base_systems -= _local
+    global_members: set = set()
+    for d in linter.docs:
+        if d.kind == "project" and d.data.get("scope") == "global":
+            global_members.update(d.data.get("members") or [])
+    covered = set()
+    for d in linter.docs:
+        if d.id not in global_members:
+            continue
+        if d.kind == "source":
+            sysname = (d.data.get("origin") or {}).get("system")
+            if sysname and sysname not in _local:
+                covered.add(sysname)
+        for c in (d.data.get("connectors") or []):
+            if isinstance(c, dict) and c.get("system"):
+                covered.add(c["system"])
+    unmapped = sorted(base_systems - covered)
+
     return {
         "freshness": freshness,
         "fingerprint": current_fp,
@@ -147,6 +178,7 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
         "as_of": as_of,
         "last_drift_check": _last_drift_check(root),
         "recoverable_connector_sources": recoverable_connectors,
+        "unmapped_connector_systems": unmapped,
     }
 
 

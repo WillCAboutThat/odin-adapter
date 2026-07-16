@@ -212,11 +212,15 @@ There are no commands to learn; you talk, and these are the verbs underneath:
 | *"why did we choose X?"* | `why` | The recorded decision and its rationale, cited. |
 | *"record a decision: we're going with Y"* | `record a decision` | Your call, authored onto the record (yours, not derived). |
 | *"what connects across our sources?"* | `synthesize` | Proposed cross-source insights, grounded and cited, written only on your nod. |
-| *"challenge our conclusions"* | `review` | An adversarial re-check of derived docs against the source bytes; read-only, advisory. |
+| *"re-check our conclusions against the sources"* | `review` | An adversarial re-check of derived docs against the source bytes; read-only, advisory. |
 | *"review the pending pile"* | `review-candidates` | Batch-admit or decline the inferences Odin staged while reasoning; declines are remembered, never re-nagged. |
 | *"is that actually true? play devil's advocate"* | `challenge` | Adversarial second opinion on one claim — the sources re-read skeptically, the world searched for counter-evidence on your word; findings offered, never auto-written. |
-| *"is our memory current with the world?"* | `drift-check` | Re-fetch connector sources on your word, compare deterministically, flag what changed; staleness cascades to everything that rested on it. |
+| *"is our memory current with the world?"* | `drift-check` | Re-fetch connector sources on your word, compare deterministically, flag what changed; staleness cascades to everything that rested on it. Sweeps **every checkable source by default**; `--project` narrows, `--older-than 30d` checks only what's due. |
 | *"is our memory healthy?"* | `lint` | The structural check that defines done: provenance present, no summary chaining, staleness flagged, every source summarized. |
+
+Every verb's switches and defaults live in a reference **generated from the same
+table that builds the CLI and the MCP tools** (so it can't drift):
+`odin/docs/odin/VERBS.md` in the plugin bundle.
 
 Maintenance verbs exist too (`init`, `status`, `regenerate`, `reindex`,
 `retier`, `supersede` — that last one is how a conclusion you've overturned

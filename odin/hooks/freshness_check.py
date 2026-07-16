@@ -87,6 +87,11 @@ def render(root, st):
         signals.append("aged as-of facts (may have drifted with the calendar): %s"
                        % ", ".join("%s (%dd old)" % (a["id"], a["days_old"])
                                    for a in st["aged"]))
+    if st.get("unmapped_connector_systems"):
+        signals.append("sources came from systems the landscape doesn't describe: "
+                       "%s → may offer (once) to orient the base / record the "
+                       "landscape (T-146)"
+                       % ", ".join(st["unmapped_connector_systems"]))
     head = ("Odin on-load status for the Muninn at %s, computed as-of %s by the "
             "plugin's deterministic SessionStart hook. This IS the MUNINN.md on-load "
             "`status` read — do not run it again." % (root, st["as_of"]))

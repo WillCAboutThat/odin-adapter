@@ -90,9 +90,19 @@ need the words "invariant" or "frontmatter" to use this well.
   it never commits to memory on its own. It ends by offering to *ingest*.
 - **regenerate** — deliberately re-derive a stale (or named) doc from its
   *current* sources. This is the *only* sanctioned way a stale doc gets rewritten.
+- **review** — "is our memory still honest to its sources?" Re-read derived
+  docs against the cited source bytes and report doubts, hedged, read-only;
+  the only heal is a consented *regenerate*.
+- **challenge** — "is that claim actually true?" On the user's word only:
+  suspend trust for ONE claim, re-read its sources skeptically, and — only on
+  a further word — look outside for disconfirming evidence. Findings are
+  offered, framed as challenge; nothing is written uninvited.
 - **review-candidates** — review emergent inferences you *staged* while reasoning
   (see below), and either **promote** each into the base or **decline** it. A
   batched review, offered on load — never a per-inference interruption.
+  *(Three near-sounding verbs, three questions: `review` = fidelity to sources;
+  `challenge` = truth of one claim; `review-candidates` = admission into
+  memory. "Challenge" as a word always means the `challenge` verb.)*
 - **lint** — "is our memory healthy?" Run the checks, report violations, flag
   staleness. It never edits derived content.
 
@@ -156,6 +166,12 @@ It returns everything worth raising on load, computed deterministically:
 - **stale docs** — derived docs whose source changed → offer `regenerate`.
 - **aged facts** — docs carrying a time-relative `as_of` older than the window (see
   *Time-relative facts* below) → note they may have drifted with the calendar.
+- **unmapped systems** — sources in this base came from systems no global
+  landscape entry describes → **offer**, once, to record the landscape ("this
+  base holds sources from <systems>, but the landscape doesn't describe them —
+  want me to record what each holds?"). Landscape entries are *domain facts*
+  ("work items live in ClickUp"), one per system, never a snapshot of what is
+  currently reachable.
 
 **Surface these as ONE consolidated nudge**, not several competing prompts — e.g.
 *"since last check: 2 new sources · 3 candidates to review · 1 stale doc · 1 aging

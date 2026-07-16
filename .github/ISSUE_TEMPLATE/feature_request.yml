@@ -1,0 +1,17 @@
+name: Feature request
+description: Something Odin should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The real situation you hit — nearly every Odin feature started as one of these.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true

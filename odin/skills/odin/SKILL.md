@@ -83,12 +83,17 @@ Find a `muninn.yml` at or above the working directory (or a path the user gives)
     can `stamp` an existing base to bring older docs under it. Don't gate `init` on an
     answer; inform, and let off-by-default proceed.
 
-## First-run setup — bootstrap the resource landscape from what you already know
+## Orient the base — bootstrap or repair the resource landscape
 
-Right after a fresh `init` (and never as a silent write), **orient the base** — this is how
-an enterprise Muninn avoids per-resource authoring. You already know what **connectors** you
-have (your MCP/tool self-descriptions) and can see the repos in reach, so **propose the whole
-landscape map at once**, then let the user confirm in one pass:
+**Three triggers, one flow (T-146):** right after a fresh `init` (the first-run
+case); **on the user's word at any time** ("orient this base", "record the
+landscape", "add ClickUp to the landscape"); or on the on-load
+`unmapped_connector_systems` offer (above) — the retroactive case for a base
+that predates its landscape or was never oriented. Never a silent write. This
+is how an enterprise Muninn avoids per-resource authoring. You already know
+what **connectors** you have (your MCP/tool self-descriptions) and can see the
+repos in reach, so **propose the whole landscape map at once**, then let the
+user confirm in one pass:
 
 1. **Survey your connectors + repos.** Enumerate the connectors you hold (Jira, Drive, Slack,
    a KB, code hosts) and any repositories in reach. This is transient reasoning over what
@@ -139,6 +144,17 @@ day. If the user insists on keeping a reachability observation, keep it honestly
 <faculty>/<model>@<version>`** — it is an **Odin-authored record with no external
 referent**, legitimate the way a person's meeting note is, but the authorship
 disclosure is mandatory and everything derived from it stamps `model-read`.
+
+**Repairing a pre-T-127 landscape (the legacy-roster case, T-146).** A base
+oriented by an older session may hold exactly that anti-pattern: one
+"active connectors" roster doc bundling every system, its prose claiming base
+or reachability state ("nothing ingested yet", "callable without auth") that
+rots by construction. The honest repair, all consented: author the per-system
+landscape entities (grounded in the user's steer captured as a source, each
+asserting `--connector`), member them into `global`, then **`supersede` the
+roster** with a reason naming its replacements — never regenerate it in place
+(a fresh roster is the same trap, fresh paint: any authored sentence about
+base state duplicates what the `connectors` projection computes live).
 
 ## Ingest (the flagship): remember a document
 
@@ -288,12 +304,17 @@ disclosure is mandatory and everything derived from it stamps `model-read`.
    summary to that view:
    `… project <root> prj-<slug> --title "<Project name>" --member src-<slug> --member sum-<slug>`
    The Core unions members (re-running is safe) and edits only the *view*, never
-   the source (membership lives on the page, ADR-0002). **Never invent a project
-   the user didn't ask for** — grouping is the user's curation, not yours; with no
-   project named, just index. Cross-cutting *standing* context (an org constraint,
-   a business model, a personal commitment) goes in the seeded `global` hub
-   (`… project <root> global --member …`), which every scope already unions in
-   (ADR-0018).
+   the source (membership lives on the page, ADR-0002). **Un-grouping is the same
+   op:** `--remove-member <id>` takes a doc out of the view (T-148) — a link
+   change only, the doc stays findable; **never hand-edit a members list**, and
+   removal is the user's curation call exactly like adding. **Never invent a
+   project the user didn't ask for** — grouping is the user's curation, not yours;
+   with no project named, just index. Cross-cutting *standing* context (an org
+   constraint, a business model, a personal commitment) goes in the seeded
+   `global` hub (`… project <root> global --member …`), which every scope already
+   unions in (ADR-0018) — and **only** standing context: the membership test is
+   "should this be in scope for *every* question?"; when unsure, default to a
+   project view, not global.
 6. **Verify:** `… lint <root>` — it **must** report 0 errors. If not, fix and
    re-lint. "The Muninn lints clean" is the definition of done **for an ingest**. A
    common finding is **L15** (a source with no summary) — heal it per **Regenerate**,
@@ -377,8 +398,24 @@ amendment and its stale flag is **correct** — voice it, never suppress it.
 
 Run `python <ODIN>/tools/muninn_core.py find <root> <query terms>`. It returns
 matching docs, **sources first**, then derived. Present them with links — no
-synthesis, no reasoning layer between the user and the record. No matches → say so
-plainly and offer to `explore`; never invent a result.
+synthesis, no reasoning layer between the user and the record. It matches a doc's
+id, title, abstract, tags, and body text — and, for sources, the **origin
+locator** (`origin.ref` / `origin.upstream_ref`, T-141), so *"what did we capture
+from `<filename/URL>`?"* hits on the locator alone.
+
+**A miss is not absence (T-142).** Zero hits means *these literal terms don't
+appear* — never "the base doesn't have it." Before reporting anything as not
+present:
+
+1. **Degrade the query:** strip extensions, split path/word separators
+   (`ARCHITECTURE.md` → `architecture`), drop the rarest term; retry.
+2. **Prefer `retrieve`** for the question itself when the semantic tier is
+   present (synonyms reach what literal terms miss).
+3. **Skim `index.md`** — every doc is listed there with its title. An existence
+   question ("did we ingest X?") is answered by the index, never by one grep.
+4. **Voice the miss honestly:** *"no literal match for '<query>' — I also checked
+   the index"* — then offer `explore` if the base genuinely lacks it. Never
+   invent a result; never report a literal miss as "not in the base."
 
 `find` is deterministic substring — *grep that knows the doc structure*. It is the
 **AI-free floor** (ADR-0014): the guarantee the base is retrievable with no AI and
@@ -628,6 +665,12 @@ competing prompts (that's the nagging we avoid):
   append one quiet clause: *"world unchecked since <date>"* (or *"never"*). A
   **mention, never an auto-run** — `drift-check` reaches outward and is always
   the user's deliberate act (T-136).
+- `unmapped_connector_systems` non-empty → **offer** (once) to orient: *"this
+  base holds sources from azure-devops and clickup, but the landscape doesn't
+  describe them — want me to record what each holds?"* (T-146). On the nod, run
+  the **Orient the base** flow below for exactly those systems. Orientation
+  debt is computed deterministically (source origins vs. the global landscape's
+  coverage), so an all-clear means the map is current — stay quiet.
 
 One line, e.g. *"since last check: 2 new sources · 3 candidates · 1 stale · 1 aging —
 handle any?"* If `status` is all-clear, stay quiet. `status` is read-only and
@@ -655,10 +698,16 @@ update is invisible until someone reaches out. `drift-check` is that reach —
 with no connectivity forever, ADR-0008; reaching is Huginn's consented act).
 
 1. **Worklist (Core, deterministic).** `… drift-worklist <root> [--project <id>]
-   [--all]` — the recoverable, connector-origin sources whose remote may have
-   moved. Default scope is the **global view's members**; `--project` unions
-   that project's (T-128); `--all` sweeps every source — **offer `--all` when
-   the default comes back thin** (sources in no view are otherwise never swept).
+   [--older-than 30d]` — the recoverable, connector-origin sources whose remote
+   may have moved. **Default scope is every eligible source in the base**
+   (T-147); `--project` narrows to that project's members ∪ the global views
+   (T-128). Items arrive **oldest contact first**, each carrying
+   `last_checked`/`last_verdict` from prior sweeps (T-145) — present the ages;
+   that IS the "what's due a check?" view. **`--older-than` is the budget
+   lever**: sweep only what's actually stale-prone instead of everything, every
+   time. The result always reports **`outside_scope`** (eligible sources the
+   requested scope excluded) and **`age_filtered`** — relay them: a narrowed or
+   empty list must never be voiced as "all current."
 2. **Reach and compare, per item.** `fetch` the current remote (your connector,
    one bounded retry on a transient failure), then the **Core compares** — by
    the strongest rung the source carries:
@@ -695,8 +744,12 @@ with no connectivity forever, ADR-0008; reaching is Huginn's consented act).
      blocks, disclosure outside; anchor at capture) — containment then checks
      deterministically forever.
 3. **Report the sweep**: one table — **same / changed / unreachable** — then
-   record it: `… drift-log <root> --same N --changed M --unreachable K
-   [--detail …]`. The log is the sweep's memory (`status` reads it for the
+   record it **per item**: `… drift-log <root> --checked <id>=<verdict>
+   [--checked …] [--detail …]` (one `--checked` per item swept; the counts
+   tally themselves from the verdicts). The per-item segment is what makes
+   `last-checked` ages reconstructible when sweeps have differing scopes
+   (T-145) — a counts-only entry loses WHICH items were verified, so always
+   pass `--checked`. The log is the sweep's memory (`status` reads it for the
    quiet "world unchecked since" line; you read recent entries to voice
    **streaks**: *"src-x unreachable, 3rd consecutive sweep"*).
 4. **Changed → offer re-capture, per item.** A consented re-capture under the
@@ -953,13 +1006,13 @@ promote a preview summary into memory unverified; park to `inbox/` without an
 explicit opt-in. **Writes:** nothing durable — only, on the opt-in, transient
 `inbox/` staging. Memory changes only when a separate `ingest` is requested.
 
-## Review (honesty audit — challenge the base's own conclusions)
+## Review (honesty audit — re-check the base's own conclusions)
 
 `review` is the **semantic sibling of the linter**: `lint` checks structural
-health deterministically; `review` challenges whether the derived layer is still
+health deterministically; `review` interrogates whether the derived layer is still
 *honest* — a judgment no deterministic rule can make (entailment is semantic,
-ADR-0015 §3; ADR-0026). It is the **proactive** form of the reactive challenge
-(ADR-0015): run the same adversarial re-read the assurance net relies on, but
+ADR-0015 §3; ADR-0026). It is the **proactive** form of ADR-0015's *reactive*
+assurance net: run the same adversarial re-read it relies on, but
 across a whole scope on demand instead of one claim by accident. It **detects and
 surfaces**; the heal is `regenerate` — never silent (the same
 detect→consent→repair loop as lint).
@@ -1014,7 +1067,11 @@ way OUT of that posture for one claim. Triggers: *"is that actually true?"*,
 memory still honest against its sources?); `challenge` is the adversarial
 interrogation of ONE claim, and it may reach **outside** the base. Same engine,
 different intents — when the user names a specific claim to attack, it's
-`challenge`; "re-check our conclusions" broadly is `review`.
+`challenge`; "re-check our conclusions" broadly is `review`. (And neither is
+`review-candidates`, which merely shares a word: that verb is **admission**
+triage of staged inferences — "deal with the pending pile" — not an audit.
+Three questions: `review` = fidelity · `challenge` = truth ·
+`review-candidates` = admission.)
 
 1. **Internal mode first, always** (cheap, reaches nothing; most bad claims die
    here). Re-read the cited sources adversarially: **quote** what they actually
@@ -1038,6 +1095,15 @@ different intents — when the user names a specific claim to attack, it's
    when the claim is genuinely overturned, **offer `supersede`** with the
    replacement recorded first (ADR-0041). Never silently edit the challenged
    doc; never store a trust score anywhere.
+   **When only internal mode ran, the close also offers the external rung
+   (T-144):** *"want me to check the world too?"* — alongside the product and
+   log offers, so the user never has to remember mode two exists. Make the
+   offer explicit and prominent when the outcome is **weakened/refuted** or
+   the weakest assurance link is **reference-tier or thin provenance** —
+   internal evidence just showed the claim wobbling, and the world-check is
+   exactly the next rung. An offer is not an invocation: external mode still
+   runs **only on the user's word** (never on the strength of the offer
+   alone).
 5. **Close with the log line** (after any consented products): `… challenge-log
    <root> <target> --outcome survived|weakened|refuted [--detail …]` — history
    a future reader can consult, never a mark on the doc.
