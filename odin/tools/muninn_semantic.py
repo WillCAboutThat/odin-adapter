@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["pyyaml"]
+# ///
 """Semantic retrieval tier (T-087) — the flagship tenant of the disposable-index
 tier (ADR-0027).
 
@@ -57,6 +61,15 @@ DEFAULT_MODEL = os.environ.get("ODIN_EMBED_MODEL", "nomic-embed-text")
 # default (~5m). Longer keeps the first-of-session retrieve warm (T-092).
 KEEP_ALIVE = os.environ.get("ODIN_OLLAMA_KEEP_ALIVE")
 
+# Two timeout budgets (T-151, from the first real usage-ledger read: retrieve
+# p95 hit 50.7s against a single 120s ceiling). The QUERY path is interactive —
+# embedding one query string (plus retrieve's self-heal refresh) must degrade to
+# `find` in seconds, not minutes; the honest disclosure does the rest. The BULK
+# path (a deliberate reindex/refresh op) keeps the generous ceiling because a
+# cold model legitimately takes ~30s to page into VRAM.
+QUERY_TIMEOUT = float(os.environ.get("ODIN_EMBED_QUERY_TIMEOUT", "10"))
+BULK_TIMEOUT = float(os.environ.get("ODIN_EMBED_BULK_TIMEOUT", "120"))
+
 
 class BackendUnavailable(RuntimeError):
     """The embedding backend could not be reached or is misconfigured (Ollama down,
@@ -73,7 +86,7 @@ _DB_REL = (".odin", "semantic.db")
 # --------------------------------------------------------------------------- #
 # Embedding backend — Ollama over HTTP, stdlib only. Injectable for tests.
 # --------------------------------------------------------------------------- #
-def ollama_embed(texts, *, model=DEFAULT_MODEL, url=DEFAULT_URL, timeout=120):
+def ollama_embed(texts, *, model=DEFAULT_MODEL, url=DEFAULT_URL, timeout=None):
     """Embed a list of strings via a local Ollama `/api/embed`. Returns a list of
     float vectors, one per input, in order.
 
@@ -82,10 +95,12 @@ def ollama_embed(texts, *, model=DEFAULT_MODEL, url=DEFAULT_URL, timeout=120):
     the caller sees the backend is down rather than getting zero results that look
     like "nothing matched". The first call after idle can take ~30s while the model
     pages into VRAM (that is `load_duration`, not a hang), hence the generous
-    default timeout.
+    BULK_TIMEOUT default; the interactive query path passes QUERY_TIMEOUT instead
+    (T-151) and degrades to `find` in seconds.
     """
     if not texts:
         return []
+    timeout = BULK_TIMEOUT if timeout is None else timeout
     body = {"model": model, "input": list(texts)}
     if KEEP_ALIVE:                                       # keep the model resident longer (T-092)
         body["keep_alive"] = KEEP_ALIVE
@@ -226,7 +241,7 @@ def _diff_index(docs, existing):
     return to_embed, to_prune, fresh
 
 
-def reindex(root, *, model=DEFAULT_MODEL, url=DEFAULT_URL, embed=None):
+def reindex(root, *, model=DEFAULT_MODEL, url=DEFAULT_URL, embed=None, timeout=None):
     """(Re)embed the legible layer of every derived doc into the sidecar.
 
     Incremental: a doc whose legible content hash is unchanged is skipped (no
@@ -239,7 +254,8 @@ def reindex(root, *, model=DEFAULT_MODEL, url=DEFAULT_URL, embed=None):
     so tests run with no backend. Returns a summary dict.
     """
     root = Path(root)
-    embed = embed or (lambda texts: ollama_embed(texts, model=model, url=url))
+    embed = embed or (lambda texts: ollama_embed(texts, model=model, url=url,
+                                                timeout=timeout))
     con = _connect(root)
     try:
         stored_model = _get_meta(con, "model")
@@ -308,7 +324,8 @@ def search(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
         if not rows or index_model is None:
             return []
         use_model = index_model                     # query must match the index
-        embed = embed or (lambda texts: ollama_embed(texts, model=use_model, url=url))
+        embed = embed or (lambda texts: ollama_embed(texts, model=use_model, url=url,
+                                                    timeout=QUERY_TIMEOUT))
         qvec = embed([query])[0]
         # math.sumprod (3.12+) is a C-level dot product — ~10× on this hot loop,
         # zero deps (T-118d); the zip-sum fallback keeps the 3.9 floor working.
@@ -364,14 +381,18 @@ def retrieve(root, query, *, k=10, model=None, url=DEFAULT_URL, embed=None):
                  "title": h.get("title", h["id"]), "path": h["path"],
                  "source": "find"} for h in find_hits]
 
-    warn = refresh(root, model=model, url=url, embed=embed)["warning"]  # self-heal; never raises
+    warn = refresh(root, model=model, url=url, embed=embed,
+                   timeout=QUERY_TIMEOUT)["warning"]  # self-heal; never raises,
+    # and on the INTERACTIVE budget (T-151): a cold backend costs seconds here,
+    # never the bulk ceiling — docs left behind stay find-reachable + warned.
 
     if index_info(root)["count"] == 0:          # still nothing embedded → floor only
         return {"via": "find", "backend": "no-index", "hits": _find_rows(), "warning": warn}
     try:
         sem_hits = search(root, query, k=k, model=model, url=url, embed=embed)
-    except BackendUnavailable:                  # Ollama down → floor only, transparently
-        return {"via": "find", "backend": "unavailable", "hits": _find_rows(), "warning": warn}
+    except BackendUnavailable as e:             # Ollama down → floor only, transparently
+        return {"via": "find", "backend": "unavailable", "hits": _find_rows(),
+                "warning": warn, "backend_detail": str(e)}
 
     seen, merged = set(), []
     for h in sem_hits:                          # meaning first (ranked)
@@ -424,7 +445,7 @@ def index_staleness(root) -> dict:
             "fresh": fresh, "indexed": len(existing)}
 
 
-def refresh(root, *, model=None, url=DEFAULT_URL, embed=None):
+def refresh(root, *, model=None, url=DEFAULT_URL, embed=None, timeout=None):
     """Best-effort, **write-only, never-raising** bring-the-index-current — the
     Core-invokable refresh sanctioned by ADR-0027 (as refined 2026-07-09): the Core
     may *invoke* the accelerator and *store* its output in the disposable tier, but
@@ -442,7 +463,7 @@ def refresh(root, *, model=None, url=DEFAULT_URL, embed=None):
     if st["stale"] == 0 and st["prune"] == 0:
         return {"status": "clean", "embedded": 0, "pruned": 0, "stale": 0, "warning": None}
     try:
-        rep = reindex(root, model=rmodel, url=url, embed=embed)
+        rep = reindex(root, model=rmodel, url=url, embed=embed, timeout=timeout)
         return {"status": "current", "embedded": rep["embedded"],
                 "pruned": rep["pruned"], "stale": 0, "warning": None}
     except BackendUnavailable as e:

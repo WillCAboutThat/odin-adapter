@@ -74,6 +74,13 @@ def _pctl(sorted_vals, q):
     return sorted_vals[max(0, math.ceil(q * len(sorted_vals)) - 1)]
 
 
+_AI_VERBS = ("ask", "review", "synthesize")
+# Ops whose presence implies reasoning happened around them (derive writes the
+# products; find/retrieve/search are the lookups reasoning rides on).
+_AI_SIGNAL_OPS = ("derive", "find", "retrieve", "search")
+_UNDERREPORT_THRESHOLD = 5   # below this, a base is too young to judge
+
+
 def usage_report(root) -> dict:
     """Aggregate the usage ledger by op: {total_ops, by_op: {op: {count, bytes_in,
     bytes_out, tokens, tokens_n, timed_n, total_ms, p50_ms, p95_ms}}}. Absent
@@ -108,6 +115,25 @@ def usage_report(root) -> dict:
         agg["total_ms"] = round(sum(ds), 1)
         agg["p50_ms"] = round(_pctl(ds, 0.50), 1)
         agg["p95_ms"] = round(_pctl(ds, 0.95), 1)
+
+    # T-152(c): the report discloses its own blind spot. Core ops are
+    # auto-recorded and trustworthy; the AI verbs (ask/review/synthesize) are
+    # adapter SELF-reports — extrinsic bookkeeping that sessions demonstrably
+    # drop. When the ledger shows real reasoning-shaped traffic and NO AI-verb
+    # record, the honest reading is "under-reported", never "no AI verbs ran" —
+    # surface it, don't let the absence masquerade as measurement (I5).
+    ai_records = sum(a["count"] for op, a in out["by_op"].items()
+                     if op in _AI_VERBS)
+    signal = sum(a["count"] for op, a in out["by_op"].items()
+                 if op in _AI_SIGNAL_OPS)
+    out["ai_verb_records"] = ai_records
+    out["underreported"] = ai_records == 0 and signal >= _UNDERREPORT_THRESHOLD
+    if out["underreported"]:
+        out["caveat"] = (
+            "AI-verb records absent (ask/review/synthesize) while the ledger "
+            "shows reasoning-shaped Core traffic — the sessions doing this work "
+            "did not log them; treat verb/token figures as a floor, not the "
+            "picture.")
     return out
 
 
@@ -128,6 +154,8 @@ body { background:var(--surface); color:var(--ink); margin:2rem auto; max-width:
        padding:0 1rem; font:15px/1.5 system-ui, sans-serif; }
 h1 { font-size:1.3rem; } h2 { font-size:1.05rem; margin-top:2rem; }
 .meta { color:var(--ink-2); font-size:0.85rem; }
+.caveat { border:1px solid var(--grid); border-left:4px solid var(--bar);
+          padding:0.5rem 0.75rem; border-radius:4px; font-size:0.9rem; }
 table { border-collapse:collapse; width:100%; margin-top:0.75rem;
         font-variant-numeric:tabular-nums; }
 th, td { text-align:right; padding:0.3rem 0.6rem; border-bottom:1px solid var(--grid); }
@@ -192,6 +220,8 @@ def usage_html(root) -> str:
             f"<h1>Odin usage ledger</h1>"
             f"<p class='meta'>{_h.escape(str(root))} · generated {_h.escape(when)} · "
             "disposable operational state (ADR-0027) — regenerate at will</p>")
+    if rep.get("underreported"):
+        head += f"<p class='caveat'>⚠ {_h.escape(rep['caveat'])}</p>"
     if not rep["by_op"]:
         return head + "<p>No usage recorded yet.</p>"
     ops = sorted(rep["by_op"].items(), key=lambda kv: -kv[1]["count"])

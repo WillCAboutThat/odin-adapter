@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import muninn_lint  # noqa: E402
 from . import util  # noqa: E402  (module-attr access = the patch point)
-from .derive import _TYPE_DIR, write_derived  # noqa: E402
+from .derive import _TYPE_DIR, verify_quoted_spans, write_derived  # noqa: E402
 from .util import _append_log, _dump_yaml, _load_yaml, _load_yaml_frontmatter, _locked, _read_doc, _valid_id  # noqa: E402
 
 
@@ -97,6 +97,16 @@ def stage_candidate(root, id, *, body, sources, title, abstract=None,
     pairs = _source_prov(root, sources)
     if not pairs:
         raise ValueError("a candidate needs at least one grounding source (I2)")
+    if proposed_kind == "insight":
+        # T-153(d): the same quote-containment gate as write_derived — a staged
+        # inference with a fabricated quote must not wait in the pile looking
+        # grounded (promote would catch it via write_derived, but the honest
+        # refusal belongs at first write).
+        _, problems = verify_quoted_spans(root, body, sources)
+        if problems:
+            detail = "; ".join(f'"{s}…" cited to {", ".join(c)}' for s, c in problems[:3])
+            raise ValueError(
+                f"quoted span(s) not found in the cited source(s) (T-153): {detail}")
     fp = _candidate_fingerprint(pairs, title, abstract, body)
 
     cdir = root / _CANDIDATES

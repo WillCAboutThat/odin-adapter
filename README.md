@@ -87,7 +87,9 @@ And no other tool has a raven.
 
 The bundled server launches via `uv run --script`, so the one prerequisite is
 [uv](https://astral.sh/uv), a single cross-platform binary; it provisions
-Python + dependencies on first launch (no host `python3` needed).
+Python + dependencies on first launch (no host `python3` needed). The same
+works for the bundled CLI — `uv run --script odin/tools/muninn_core.py <verb> …`
+runs the durability-floor tooling on a bare machine, no pip, no venv.
 
 **macOS / Linux:**
 

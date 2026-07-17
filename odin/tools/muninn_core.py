@@ -1,3 +1,9 @@
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["pyyaml"]
+# ///
+# ^ PEP-723 (ADR-0031, T-150): `uv run --script` provisions Python + pyyaml, so
+#   the durability-floor CLI runs on a bare machine with no setup, like odin_mcp.py.
 """Muninn Core — deterministic, tool-neutral operations (ADR-0008).
 
 The Core owns every file write and every invariant-carrying step, as **fat atomic
@@ -17,7 +23,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from muninn import util  # noqa: E402,F401  (the shared patch point: core.util._now)
+try:
+    from muninn import util  # noqa: E402,F401  (the shared patch point: core.util._now)
+except ModuleNotFoundError as _e:  # pragma: no cover — exercised via subprocess test
+    if getattr(_e, "name", "") != "yaml":
+        raise
+    sys.stderr.write(
+        "pyyaml is missing for this Python (T-150).\n"
+        "  Fix:  python3 -m pip install pyyaml\n"
+        "  Or :  uv run --script " + __file__ + " <op> ...   (provisions it automatically)\n")
+    sys.exit(1)
 from muninn.util import (  # noqa: E402,F401
     FORMAT_VERSION,
     TOOL_VERSION,

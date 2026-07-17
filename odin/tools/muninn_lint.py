@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["pyyaml"]
+# ///
 """Muninn linter — enforces the invariants of the Muninn knowledge format.
 
 Implements the lint rules L1–L15 defined in docs/muninn/SPEC.md §7. The linter
@@ -23,7 +27,7 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:  # pragma: no cover
-    print("error: PyYAML is required (pip install pyyaml)", file=sys.stderr)
+    print("error: PyYAML is required — `python3 -m pip install pyyaml`, or run via `uv run --script` which provisions it (T-150)", file=sys.stderr)
     sys.exit(2)
 
 DERIVED_TYPES = {"summary", "entity", "concept", "question", "insight"}

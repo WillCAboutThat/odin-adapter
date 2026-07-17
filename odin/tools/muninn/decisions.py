@@ -2,6 +2,7 @@
 
 Split from muninn_core.py (T-122); muninn_core remains the facade.
 """
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +81,8 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
       - aged       : {id, as_of, days_old} for `as_of` docs older than the window (T-104)
       - unmapped_connector_systems : systems the base's sources came from that no
         global landscape entry covers (T-146 — the retroactive-orientation trigger)
+      - caller_can_write : can THIS context write the base? False on an
+        ownership-hardened deployment (T-155, docs/odin/HARDENING.md)
 
     `aged` is empty unless `as_of` (today) is supplied — time only enters here, never lint.
 
@@ -179,6 +182,12 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
         "last_drift_check": _last_drift_check(root),
         "recoverable_connector_sources": recoverable_connectors,
         "unmapped_connector_systems": unmapped,
+        # T-155: whether THIS process context can write the base. False on an
+        # ownership-hardened deployment (docs/odin/HARDENING.md) — the adapter
+        # should expect writes to go through the privileged Core invocation and
+        # not be surprised by permission errors. A fact, not a signal: standing
+        # deployment state, never nudged.
+        "caller_can_write": os.access(root, os.W_OK),
     }
 
 

@@ -54,6 +54,12 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
   use the interpreter the project uses.
 - **The Muninn is separate from this tool** (ADR-0002). Never write knowledge into
   the project-odin repo.
+- **Hardened bases (T-155).** If `status` reports `caller_can_write: false`, the
+  base is ownership-hardened (docs/odin/HARDENING.md): your context reads freely,
+  and every write op must be invoked through the deployment's privileged wrapper
+  (e.g. `sudo -u odin python3 … muninn_core.py <op> …`). Expect a bare write to be
+  permission-denied — that is the posture working, not an error to work around;
+  never attempt to bypass it.
 
 ## Locate the Muninn first
 
@@ -594,6 +600,10 @@ of `ask`/`synthesize`. Odin is the scribe, not the author.
    `question` doc via `derive --type question` — grounded and cited. Offer; don't
    clutter unasked. Never treat a derived doc as ground truth without the sources
    behind it.
+6. **Log the run — the close step, every time (T-152).**
+   `… usage-log <root> ask --scope <the ids you actually read> [--tokens N]` —
+   the Core can't see this verb, so the record is the only way `usage` measures
+   it (rules: *Usage-logging rules* below; silent, best-effort, never a gate).
 
 ## Stage & review candidates (channel emergent augmentation — ADR-0033)
 
@@ -868,6 +878,18 @@ on a derived-only change (a `regenerate` adds nothing new to connect).
      willing to **dissolve** the connection if the fetched source doesn't support it
      (ADR-0015) — a dispatch sent to "confirm a hunch" manufactures agreement.
      Crystallize only after a separately-consented `ingest` supplies the leg.
+     **And offer the gap a durable home (T-154):** a real question the sources
+     raise but don't settle is knowledge worth keeping — offer to record it as
+     an **open `question` doc**: `… derive <root> q-<slug> --type question
+     --title "<the question>" --abstract "OPEN — <what's unresolved and which
+     sources raise it>" --source <the raising sources> --file <body>`. The
+     abstract **leads with "OPEN — "** so the index skim doubles as the
+     open-questions register (ADR-0012). Consented, never auto; a **direct
+     derive, never the candidates pile** (that channel holds inferences
+     awaiting admission, not gaps — T-129 boundary). An open question is
+     Huginn's shopping list — `explore` can be dispatched at it later — and
+     when the resolving source lands, **`regenerate` re-derives it into its
+     answered form**: the question's honest lifecycle, no new machinery.
    - **The composition can lie even when every span is true.** Accurately-cited
      bricks can still build an arch the sources never state — e.g. placing an
      unrelated consequence clause under "why this breach matters" asserts a
@@ -876,8 +898,15 @@ on a derived-only change (a `regenerate` adds nothing new to connect).
      I?"* If it's your inference, either drop it or label it (rule below). The
      linter cannot catch this — citations and lint verify the bricks, never the
      arch; only this discipline does.
-4. **Propose, don't commit (§3.7).** Present the connections you found for the user
-   to validate. Write **nothing** durable unasked.
+4. **Propose, don't commit (§3.7) — and every proposal carries its evidence
+   (T-153).** Present each connection **with verbatim quoted spans from the
+   source files, one per leg** — `"…the exact words…" [src-x]` — never a
+   summary's paraphrase. A connection you cannot quote is one you haven't
+   grounded yet: back to step 3, or the gap path. The format IS the
+   discipline (quotes force the source re-read the 2026-07-16 dogfood showed
+   gets skipped), and the Core enforces it downstream: at crystallize, **a
+   quoted span that isn't in its cited source refuses the write**. Write
+   **nothing** durable unasked.
 5. **Crystallize on the nod.** For each connection the user keeps, write an
    **`insight`** doc via the Core, grounded in its N peer sources and stamped
    **`--derivation synthesis`** (the third integrity rung — an insight is the
@@ -885,7 +914,11 @@ on a derived-only change (a `regenerate` adds nothing new to connect).
    `… derive <root> ins-<slug> --type insight --title "<t>" --abstract "<a>" \
       --source src-A --source src-B [--source …] --derivation synthesis --file <body>`
    Author the body in the reader's vocabulary (ADR-0012) with the per-span
-   citations from step 3, under these **authoring rules** (ADR-0015 — learned
+   citations from step 3 — **carrying the step-4 quoted spans**: the Core
+   containment-verifies every ≥15-char double-quoted span on a line citing a
+   provenance source against that source's actual text and **refuses the
+   write on a mismatch** (T-153; a fabricated or paraphrased "quote" cannot
+   enter the base) — under these **authoring rules** (ADR-0015 — learned
    from a real overreach that passed author, reviewer, and lint):
    - **The abstract may not assert a link the sources don't state.** It is the
      index-projected, most-skimmed span — "a breach *tied to* the return clause"
@@ -918,6 +951,10 @@ on a derived-only change (a `regenerate` adds nothing new to connect).
 6. **Report** the insights written (ids, the sources each connects) and note the
    `synthesis` assurance rung — an insight is a reasoned connection over sources,
    not a fact copied from one.
+7. **Log the run — the close step, every time (T-152).**
+   `… usage-log <root> synthesize --scope <every id read in steps 2–3> [--tokens N]`
+   — a synthesize that skips this is invisible to `usage` (the 2026-07-16 ledger
+   read found exactly that); rules: *Usage-logging rules* below.
 
 ## Explore (outward discovery — Huginn reaches, never remembers)
 
@@ -1035,7 +1072,10 @@ detect→consent→repair loop as lint).
    - **Drift against new knowledge** — does the conclusion still hold against
      *everything the base now holds*, including sources ingested **after** this doc
      was derived? The linter can't see this — the newer source isn't in the doc's
-     provenance, so no hash changed — so it's yours to catch.
+     provenance, so no hash changed — so it's yours to catch. **Open `question`
+     docs are this check's prime target (T-154):** for each abstract leading
+     "OPEN — ", ask *does the base NOW answer it?* — a yes is a finding whose
+     heal is `regenerate` into the answered form.
 4. **Report a hedged second opinion — never a verdict.** For each finding: name the
    doc + the claim, quote the source span (or say plainly *no source attests this*),
    state the doubt in the reader's words, and default to *"a skeptical reader would
@@ -1047,6 +1087,10 @@ detect→consent→repair loop as lint).
    with **no durable "reviewed" mark** on any doc (an AI blessing rots and invites
    false trust, ADR-0014; the durable audit stays provenance you can re-hash).
    `regenerate` does any write.
+6. **Log the run — the close step, every time (T-152).**
+   `… usage-log <root> review --scope <docs + sources re-read> [--tokens N]` —
+   disposable operational state (ADR-0027), not a base write, so "review writes
+   nothing" still holds; rules: *Usage-logging rules* below.
 
 **It is `review`, not `audit`** — "audit" already means the *deterministic* check
 (re-read + re-hash provenance, ADR-0014); `review` is the subjective second
@@ -1114,13 +1158,15 @@ Three questions: `review` = fidelity · `challenge` = truth ·
 **Never:** auto-runs (the user mentioning doubt is not an invocation — ask);
 writes uninvited; reaches outside without the user's word; rates truth.
 
-## Usage logging (measure the AI-heavy verbs — best-effort, never a gate)
+## Usage-logging rules (the shared close step of ask · review · synthesize)
 
-The ledger auto-records the deterministic Core writes (`capture`/`derive`), but the
-real token spenders — **`ask`, `review`, `synthesize`** — are your orchestration, so
-the Core can't see them. **After** you finish one, append a usage record with
-`odin_usage_log` (CLI `usage-log`) so `odin usage` shows the full picture and review
-cadence can be tuned by evidence, not guess (T-088):
+Each AI verb's flow ends with a numbered **log-the-run step** pointing here —
+placement inside the flow, not a section to remember (T-152; the standalone-
+section geometry demonstrably dropped). The ledger auto-records the
+deterministic Core ops, but the real token spenders — **`ask`, `review`,
+`synthesize`** — are your orchestration, so the Core can't see them; the
+record you append with `odin_usage_log` (CLI `usage-log`) is the only
+measurement there is, and `usage` now says so out loud when it's missing:
 
 - Pass **`scope`** = the doc/source ids the verb actually read; the Core computes their
   byte-footprint deterministically as an honest cost **proxy** (you don't compute bytes).

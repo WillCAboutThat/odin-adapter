@@ -129,6 +129,63 @@ def relink(root):
     return {"relinked": relinked, "spans": spans, "unchanged": unchanged}
 
 
+# --------------------------------------------------------------------------- #
+# T-153(d): quoted-span containment — evidence in the artifact, verified at the
+# write seam. The Core cannot watch the synthesize PROCESS (the propose step is
+# write-free conversation), so it demands what only the correct process
+# produces: a verbatim quote attributed to a source must actually appear in
+# that source's text. String containment = a faithful transform (the ADR-0039
+# posture, pointed at citations). Quotes are wrapped by the AUTHOR, so unlike
+# anchor containment this normalizes whitespace runs and curly quotes — the
+# line-wrap is authoring, not content.
+# --------------------------------------------------------------------------- #
+_QUOTE_MIN_CHARS = 15
+_QUOTE_SPAN_RE = re.compile(r'["\u201c]([^"\u201c\u201d]+)["\u201d]')
+_CITE_ID_RE = re.compile(r'\[(src-[A-Za-z0-9][A-Za-z0-9-]*)\]')
+
+
+def _quote_norm(s: str) -> str:
+    s = (s.replace("\u201c", '"').replace("\u201d", '"')
+          .replace("\u2018", "'").replace("\u2019", "'"))
+    return " ".join(s.split())
+
+
+def verify_quoted_spans(root, body, source_ids):
+    """Every ≥15-char double-quoted span on a line that also cites a provenance
+    source must be contained (whitespace-normalized) in at least one of that
+    line's cited sources' text. Returns (checked, problems) — problems is
+    [(span_preview, cited_ids)]. Lines citing non-provenance ids are ignored
+    (the I3 check owns those); short quotes are ignored (incidental phrases).
+    Deliberately NARROW: precision over recall — a missed quote costs nothing
+    (the contract + probes cover format adherence); a false refusal blocks an
+    honest write."""
+    root = Path(root)
+    source_ids = set(source_ids)
+    cache: dict = {}
+    checked, problems = 0, []
+    for line in body.split("\n"):
+        cites = [c for c in _CITE_ID_RE.findall(line) if c in source_ids]
+        if not cites:
+            continue
+        for m in _QUOTE_SPAN_RE.finditer(line):
+            span = _quote_norm(m.group(1))
+            if len(span) < _QUOTE_MIN_CHARS:
+                continue
+            checked += 1
+            ok = False
+            for sid in cites:
+                if sid not in cache:
+                    sdir = root / "sources" / sid
+                    cache[sid] = _quote_norm(
+                        muninn_lint.source_text(sdir, _load_yaml(sdir / "meta.yml")))
+                if span in cache[sid]:
+                    ok = True
+                    break
+            if not ok:
+                problems.append((span[:80], cites))
+    return checked, problems
+
+
 @_locked
 def write_derived(root, id, *, body, sources, type="summary", title,
                   abstract=None, status="current", see_also=None,
@@ -163,6 +220,17 @@ def write_derived(root, id, *, body, sources, type="summary", title,
                 f"provenance id {sid!r} is not a source — derivation must be grounded "
                 f"only in sources (I3, no chaining)")
         prov.append({"id": sid, "hash": _load_yaml(meta_p).get("content_hash")})
+
+    if type == "insight":
+        # T-153(d): an insight is the least deterministic derivation — its
+        # claimed verbatim quotes are the evidence the write seam CAN verify.
+        _, problems = verify_quoted_spans(root, body, sources)
+        if problems:
+            detail = "; ".join(f'"{s}…" cited to {", ".join(c)}' for s, c in problems[:3])
+            raise ValueError(
+                f"quoted span(s) not found in the cited source(s) (T-153): {detail} — "
+                f"a verbatim quote must appear in the source's text; re-read the "
+                f"source and quote it exactly, or cite the source that states it")
 
     fm = {"id": id, "type": type, "title": title}
     if abstract:

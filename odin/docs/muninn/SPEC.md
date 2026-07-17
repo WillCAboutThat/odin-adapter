@@ -77,7 +77,7 @@ always flows from sources.
 
 ### I2 — Every derived document declares its provenance
 
-A **derived document** (summary, entity page, concept page, answered question)
+A **derived document** (summary, entity page, concept page, question — answered or explicitly open)
 must declare, in its frontmatter, the exact sources it was grounded in — by
 stable id and content hash. A derived document with no provenance is an error
 (an "orphan"). Provenance is a required field, not documentation.
@@ -142,7 +142,7 @@ entries below live at its root, not under a wrapping `muninn/` folder.
 ├── summaries/          # Derived: condensed, source-grounded write-ups
 ├── entities/           # Derived: one page per entity (a person, place, product, org, system…)
 ├── concepts/           # Derived: one page per concept or term
-├── questions/          # Derived: answered questions of any kind (a policy, a recipe, an API…)
+├── questions/          # Derived: questions of any kind, answered or explicitly OPEN (a policy, a recipe, an unresolved gap the sources raise…)
 ├── insights/           # Derived: cross-source connections found by `synthesize` (ADR-0009)
 ├── projects/           # Curated *view* pages — "projects" as index over sources (ADR-0002)
 │   ├── global.md       # The one canonical always-in-scope view, seeded at init (ADR-0018)
@@ -800,7 +800,11 @@ mandates that the result conforms.
   deterministic (Core) while *fetching* and healing stay adapter judgment (ADR-0008).
 - **Derive** (Odin): read one or more **sources**, write or update a derived
   document with a complete `sources` provenance list copied from those sources'
-  current hashes (I2, I3), update `index.md`, append to `log.md`.
+  current hashes (I2, I3), update `index.md`, append to `log.md`. For an
+  **insight**, the write additionally verifies **quoted-span containment**
+  (T-153): a double-quoted span on a line citing a provenance source must
+  appear (whitespace-normalized) in that source's text, or the write is
+  refused — a claimed verbatim quote is evidence the seam can check.
 - **Supersede** (consented, ADR-0041): mark a derived document ended —
   `status: superseded` + `superseded_by` and/or `supersede_reason`, stamped
   `superseded_at`; reversible (lift). Touches only these machine fields;

@@ -409,6 +409,9 @@ lower assurance." The two axes are orthogonal and both surfaced: capture tier
 `synthesis`). *(The `synthesis` rung activates with `synthesize`, T-042; until then
 `ask` rolls up `extracted`/`model-read`.)*
 
+
+**Close (T-152):** append the usage record — `usage-log ask --scope <ids read> [--tokens <real count only>]` — as the flow's final step. Disposable operational state (ADR-0027), never a base write; the Core cannot see this verb, so the record is the only measurement there is, and the `usage` report discloses when it's missing.
+
 **Never:** fabricates, or answers from derived docs as if they were ground truth
 without the underlying sources supporting the claim; or asserts from
 `model-knowledge` beyond the captured sources (§3, bright line).
@@ -430,13 +433,22 @@ cross-cutting context (org constraints, business model) that bears on all projec
 candidate discovery** (what the summary layer is *for*), then propose connections —
 shared entities, date/deadline dependencies, contradictions, causal or thematic
 links. **Every proposed connection is grounded in and cited to sources** (I2/I3),
-as an unordered set of **peers** with **per-span** citations (SPEC §5.2); an
+as an unordered set of **peers** with **per-span** citations (SPEC §5.2) — and
+**every proposal carries verbatim quoted spans from the source files, one per
+leg** (T-153): a connection that cannot be quoted has not been grounded, and
+the quote is not decoration — at crystallize the Core **containment-verifies
+each quoted span against its cited source's text and refuses the write on a
+mismatch**, so a summary-paraphrase "quote" cannot enter the base. An
 unsupported proposal is **dropped, not narrated**. A proposal that is **incomplete
 rather than wrong** — a real connection with one leg simply missing from memory — is
 *not* silently dropped: Odin **surfaces the gap and offers to dispatch Huginn** to
 fetch the missing leg (a third path beside ground-it and drop-it), acquiring
 **neutrally** and staying willing to **dissolve** the connection if the fetched source
-doesn't support it (ADR-0021, ADR-0015). Assurance is signaled (§3.5).
+doesn't support it (ADR-0021, ADR-0015). A gap worth keeping is **offered a durable
+home** (T-154): an **open `question` doc** — grounded in the sources that raise it,
+abstract leading **"OPEN — "** so the index doubles as the open-questions register —
+consented, a direct derive (never the candidates pile), later re-derived into its
+answered form by `regenerate` when the resolving source lands. Assurance is signaled (§3.5).
 Synthesize **proposes; it does not commit** (§3.7): on the user's nod, kept
 connections crystallize into `insight` documents (multi-source, fully provenanced)
 and/or `see_also` enrichments on concept/entity pages.
@@ -468,6 +480,9 @@ its **breadth** inflated in the skimmable layer — and was surfaced by the adap
 rubric (ADR-0023, T-075) after the T-042 arc. The `derivation: synthesis` stamp is
 what lets a later `ask` distrust the paraphrase and re-read the bytes — that
 safety net is *reactive*; these rules are the proactive half.
+
+
+**Close (T-152):** append the usage record — `usage-log synthesize --scope <ids read> [--tokens <real count only>]` — as the flow's final step. Disposable operational state (ADR-0027), never a base write; the Core cannot see this verb, so the record is the only measurement there is, and the `usage` report discloses when it's missing.
 
 **Never:** asserts a connection on the authority of a summary (no chaining, I3),
 or writes an `insight` unasked.
@@ -787,6 +802,9 @@ non-deterministic and AI-dependent, so it is deliberately not lint-enforced, not
 CI-gated, not a release gate (consistent with ADR-0015 §3 and ADR-0023's "manual
 benchmark, not a flaky gate"). The deterministic floor (`lint`, the oracle) is
 what gates; `review` advises.
+
+
+**Close (T-152):** append the usage record — `usage-log review --scope <ids read> [--tokens <real count only>]` — as the flow's final step. Disposable operational state (ADR-0027), never a base write; the Core cannot see this verb, so the record is the only measurement there is, and the `usage` report discloses when it's missing.
 
 **Never:** edits a source or a derived doc (§I1/§I5 — it only reads and reports);
 writes a durable "reviewed" mark; presents its judgment with false precision; or
