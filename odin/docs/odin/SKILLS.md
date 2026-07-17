@@ -150,6 +150,23 @@ contacting the remote is an outward reach, always the user's deliberate act (the
 drift-check posture), so pulling is an offer taken only on the nod. Silence means
 "current as of the last fetch," never "current."
 
+**Close a session (T-169).** The on-load ritual has no session-end twin: no
+dependable hook fires when work ends, so settling always waited for the next
+open - and on a git-backed base, unpushed work becomes the next machine's
+stale-clone problem. The user saying "close out" / "wrap up" / "settle the
+base" IS the end-of-session signal, and the flow it triggers is all offers:
+(1) pending candidates -> offer `review-candidates` (the batch moment, second
+chance); (2) `lint` -> 0 errors is the closing posture; findings surfaced with
+heals offered, never silently fixed; a declined heal closes imperfect but
+never uninformed; (3) `inbox/` -> anything still parked is named (its meaning
+is exactly "still pending"); (4) git-backed base -> offer the commit + push
+with a plain session summary message - the load nudge's other half: the nudge
+catches the stale clone next time, the close-settle prevents it this time.
+**Settle git LAST** (content steps first, or the push loops), and never
+commit or push without the nod. (5) One-paragraph close report from
+`log.md`'s tail: what changed, what stays open. The reference adapter ships
+this as a bundled skill/command; any adapter honors the phrases.
+
 ## 3. Cross-cutting guarantees
 
 These hold for *every* skill. They are the spirit of the invariants, made
