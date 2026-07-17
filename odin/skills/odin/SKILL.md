@@ -689,6 +689,17 @@ competing prompts (that's the nagging we avoid):
   the **Orient the base** flow below for exactly those systems. Orientation
   debt is computed deterministically (source origins vs. the global landscape's
   coverage), so an all-clear means the map is current — stay quiet.
+- **Git-backed base (T-167).** If the base root is a git repository with a
+  remote tracking branch, fold in ONE quiet clause from a **local-only**
+  `git -C <root> status -sb` read — uncommitted changes, unpushed commits, or
+  known behind-ness: *"working tree has uncommitted changes"* / *"2 behind
+  origin (as of the last fetch)"*. **Never fetch or pull on load** — contacting
+  the remote is an outward reach, always the user's deliberate act (the
+  drift-check posture): **offer** *"fetch and pull first?"* and act only on the
+  nod. A clean local status stays silent — and silence means "current as of
+  the last fetch," never "current": only a consented fetch can see newer
+  remote commits. Working from a stale clone is the two-machine failure this
+  clause exists to catch **before** the write, not at the push conflict.
 
 One line, e.g. *"since last check: 2 new sources · 3 candidates · 1 stale · 1 aging —
 handle any?"* If `status` is all-clear, stay quiet. `status` is read-only and

@@ -142,7 +142,13 @@ once — to look for the connections they form with existing memory, running
 `synthesize` only on acceptance (never unasked; it is a real token spend, and
 proposing-not-writing extends to proposing-not-scanning). A derived-only change (a
 `regenerate`) is skipped. This is `synthesize`'s **proactive on-load** mode
-(ADR-0009 §6, riding ADR-0005).
+(ADR-0009 §6, riding ADR-0005). **Git-backed base (T-167).** When the base root
+is a git repository with a remote tracking branch, the on-load nudge folds in one
+quiet clause from a local-only `git status -sb` read (uncommitted changes,
+unpushed commits, known behind-ness) — and **never fetches or pulls on load**:
+contacting the remote is an outward reach, always the user's deliberate act (the
+drift-check posture), so pulling is an offer taken only on the nod. Silence means
+"current as of the last fetch," never "current."
 
 ## 3. Cross-cutting guarantees
 

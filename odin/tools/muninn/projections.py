@@ -150,7 +150,32 @@ def regenerate_index(root):
 
     index = root / "index.md"
     index.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+    _write_llms_txt(root, linter)
     return index
+
+
+def _write_llms_txt(root, linter):
+    """Emit `llms.txt` beside the index (T-168): the emerging convention a
+    generic AI agent fetches to orient in an unfamiliar repo. Pure projection
+    (manifest name + fixed routing text, no prose authored) — the base's
+    self-description made literal for readers that never heard of ODIN. A
+    projection artifact like index.md: not load-bearing, not part of format
+    conformance; a reader that ignores it loses nothing.
+    """
+    manifest = next((d for d in linter.docs if d.kind == "manifest"), None)
+    name = (manifest.data.get("name") if manifest else None) or "knowledge base"
+    (root / "llms.txt").write_text(
+        f"# {name}\n\n"
+        "> A Muninn: a durable, self-describing knowledge base of captured\n"
+        "> sources and grounded derived documents. Plain Markdown, links, and\n"
+        "> content-hash provenance; readable and verifiable with no AI and no\n"
+        "> vendor.\n\n"
+        "- [MUNINN.md](MUNINN.md): what this base is and the rules for reading it\n"
+        "- [index.md](index.md): the catalog; every document, titled, sources first\n"
+        "- sources/ holds immutable, authoritative captures; derived documents\n"
+        "  (summaries/, insights/, ...) cite them by id and content hash; when a\n"
+        "  summary and its source disagree, the source wins\n",
+        encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #

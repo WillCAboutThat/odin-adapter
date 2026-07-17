@@ -35,6 +35,15 @@ DERIVED_DIRS = {"summaries", "entities", "concepts", "questions", "insights"}
 DERIVATION_VALUES = {"extracted", "model-read", "synthesis"}  # §5.2 / ADR-0011 (L14)
 SCOPE_VALUES = {"project", "global"}  # §5.6 / ADR-0002 (L16); absent defaults to 'project'
 DECISION_STATUS_VALUES = {"proposed", "accepted"}  # §5.5 / ADR-0019 (L17)
+# L21 mojibake heuristic (warning): character sequences produced when UTF-8 text
+# is decoded as cp1252 and re-encoded (the D:\muninn incident, T-166). "â€" alone
+# covers the whole curly-punctuation class (em/en dash, smart quotes, ellipsis);
+# the rest are common accented letters and symbols in their double-encoded form.
+# Checked ONLY in adapter-authored fields (titles, abstracts, authored bodies) —
+# never in source bytes or extracted text aids: a faithful capture of a genuinely
+# garbled upstream is the source's own state, not our authoring defect.
+MOJIBAKE_SIGNS = ("â€", "Ã©", "Ã¨", "Ã¡", "Ã³", "Ãº", "Ã±", "Ã¤", "Ã¶", "Ã¼",
+                  "Ã§", "Ã‰", "Â·", "Â³", "Â°", "Â»", "Â«", "Â½", "Â¼", "â„¢")
 # L18 summary-compression: a summary shorter than this many chars of source text is
 # exempt — a small table or short note is *already* summary-length, so its derived doc
 # is mostly findability facets, not restated content, and may legitimately run longer.
@@ -336,6 +345,44 @@ class Linter:
                 self._check_decision(d)
         self._check_index()
         self._check_source_summaries()
+        for d in self.docs:
+            self._check_mojibake(d)
+
+    def _check_mojibake(self, d: Doc):
+        # L21 (warning, T-166): flag likely double-encoded text in ADAPTER-
+        # AUTHORED fields: derived and decision docs are authored throughout
+        # (title/abstract/body); a project contributes its title. Sources are
+        # exempt entirely — no authored fields exist there. The message names
+        # the likely cause so the flag carries the diagnosis, and the honest
+        # repair per kind.
+        if d.kind in ("manifest", "source"):
+            # A source has NO authored fields — no title in meta.yml (the
+            # index borrows its description from the covering summary), and
+            # its bytes/text aids are faithful capture, exempt by design.
+            return
+        fields = {"title": d.data.get("title")}
+        if d.kind == "derived":
+            fields["abstract"] = d.data.get("abstract")
+        if d.kind in ("derived", "decision"):
+            try:
+                _, body = split_frontmatter(d.path.read_text(encoding="utf-8"))
+                fields["body"] = body
+            except Exception:
+                pass
+        heal = ("re-deriving (regenerate)" if d.kind == "derived"
+                else "a consented correction")
+        for fname, text in fields.items():
+            if not isinstance(text, str):
+                continue
+            hit = next((s for s in MOJIBAKE_SIGNS if s in text), None)
+            if hit:
+                self.warn(
+                    "L21",
+                    f"likely mojibake {hit!r} in {fname} — UTF-8 decoded as "
+                    f"cp1252 somewhere upstream (often a host console/codepage "
+                    f"issue); heal via {heal}",
+                    d.path)
+                break
 
     def _require(self, doc, fields):
         for f in fields:

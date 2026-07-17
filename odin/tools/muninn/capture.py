@@ -577,6 +577,7 @@ def retier(root, id, tier=None, *, reason=None, recoverable=None):
             "recoverable": origin.get("recoverable"), "changed": True}
 
 
+
 def log_drift_check(root, *, same=None, changed=None, unreachable=None,
                     detail=None, checked=None):
     """Record a completed drift-check sweep in the append-only ADR-0005 log
