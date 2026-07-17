@@ -22,7 +22,7 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
 
 - **Core transport — prefer the MCP tools when present (T-076).** When the bundled
   `odin-core` **MCP server** is available (the plugin install ships it), drive the
-  Core through its `odin_*` tools — `odin_init`, `odin_capture`, `odin_dedup_check`,
+  Core through its `odin_*` tools — `odin_init`, `odin_read`, `odin_capture`, `odin_dedup_check`,
   `odin_source_status`, `odin_derive`, `odin_index`, `odin_find`, `odin_project`,
   `odin_resolve`, `odin_record_decision`, `odin_fingerprint`, `odin_lint`,
   `odin_stamp`, `odin_reproject`, `odin_capture_repo`, `odin_connectors`, `odin_usage`,
@@ -52,6 +52,14 @@ verb does), `docs/muninn/SPEC.md` (the format), and the base's own `MUNINN.md`.
   (`pypdf` → PDF, `python-docx` → .docx; HTML + `.csv`/`.tsv` need no dep). A
   format with no extractor still captures bytes-only. If `python` isn't found,
   use the interpreter the project uses.
+- **Reading base content without a filesystem (T-159).** Where you have file
+  tools, read sources/docs directly as ever. Where you have ONLY the op surface
+  (the web chat adapter, any MCP-only host), `… read <root> <id>` /
+  `odin_read` returns any doc's stored text verbatim, paged (`offset`/`limit`;
+  a source returns the same text `find`/derivation use) — this is how you
+  ground summaries, quote sources, and re-read for review/challenge there.
+  `text_form: "none"` = a bytes-only source: say so and model-read the
+  original bytes if your host can, never guess from the filename.
 - **The Muninn is separate from this tool** (ADR-0002). Never write knowledge into
   the project-odin repo.
 - **Hardened bases (T-155).** If `status` reports `caller_can_write: false`, the

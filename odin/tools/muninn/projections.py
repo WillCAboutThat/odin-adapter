@@ -154,6 +154,49 @@ def regenerate_index(root):
 
 
 # --------------------------------------------------------------------------- #
+# read — the read-back primitive (T-159): "anyone reads, the Core writes"
+# assumed a filesystem; a host that has only the op surface (the web chat
+# adapter, any MCP-only client) could capture but never read content back —
+# so it could not ground a summary, quote a source (T-153), or re-read for
+# review/challenge. Returning stored text verbatim is a faithful transform.
+# --------------------------------------------------------------------------- #
+def read_doc(root, id, offset=0, limit=20000):
+    """Return a doc's stored text, paged: for a **source**, its readable text
+    (the extracted aid, else a text-native canonical — `muninn_lint.source_text`,
+    the same text `find`/`index`/derivation read); for a derived doc, project
+    page, or decision, the file's content verbatim. A bytes-only source (no text
+    layer) returns empty content with `text_form: "none"` — the honest signal
+    that grounding needs a model-read of the original bytes, never a guess.
+
+    `offset`/`limit` are character paging (hosts have context/result caps);
+    `truncated` says whether more remains past this page. Read-only.
+
+    Returns {id, kind, type, text_form, chars, offset, content, truncated}.
+    """
+    root = Path(root)
+    offset = max(0, int(offset))
+    limit = int(limit)
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    linter = snapshot.load_snapshot(root)
+    d = next((x for x in linter.docs if x.id == id and x.kind != "manifest"), None)
+    if d is None:
+        raise ValueError(f"no doc with id {id!r} in this base")
+    if d.kind == "source":
+        text = source_text(d.path, d.data)
+        text_form = ("none" if not text
+                     else "aid" if (d.path / "source-text.md").exists()
+                     else "canonical")
+    else:
+        text = d.path.read_text(encoding="utf-8", errors="replace")
+        text_form = "file"
+    page = text[offset:offset + limit]
+    return {"id": d.id, "kind": d.kind, "type": d.type, "text_form": text_form,
+            "chars": len(text), "offset": offset, "content": page,
+            "truncated": offset + len(page) < len(text)}
+
+
+# --------------------------------------------------------------------------- #
 # fingerprint — the freshness hash as a Core op (ADR-0005, SPEC §4.4)
 # --------------------------------------------------------------------------- #
 def fingerprint(root):

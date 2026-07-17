@@ -13,7 +13,7 @@ from .candidates import decline_candidate, list_candidates, promote_candidate, s
 from .capture import anchor, anchor_check, capture, capture_file, capture_repo, dedup_check, log_drift_check, retier, source_status  # noqa: E402
 from .decisions import lint_report, record_decision, status  # noqa: E402
 from .derive import log_challenge, relink, stamp_derived, supersede, write_derived  # noqa: E402
-from .projections import connector_projection, drift_worklist, find, fingerprint, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
+from .projections import connector_projection, drift_worklist, find, fingerprint, read_doc, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
 from .scaffold import init  # noqa: E402
 from .usage import _source_bytes, log_usage, usage_html, usage_log, usage_report  # noqa: E402
 
@@ -916,6 +916,35 @@ OPS = {
             remove_members=p.get("remove_members"),
             scope=p.get("scope"), description=p.get("description"),
             maintained_by=p.get("maintained_by"), tags=p.get("tags"), when=util._now()),
+    },
+    "read": {
+        "help": "return a doc's stored text, paged — the read-back primitive "
+                "for hosts without filesystem access (T-159)",
+        "description": "Return a doc's stored text verbatim, paged. For a "
+                       "SOURCE: its readable text (the extracted aid, else a "
+                       "text-native canonical — the same text find/index/"
+                       "derivation read); a bytes-only source returns empty "
+                       "content with text_form 'none' (grounding then needs a "
+                       "model-read of the original bytes — never a guess). For "
+                       "a derived doc/project/decision: the file's content. "
+                       "This is the read half of 'anyone reads, the Core "
+                       "writes' for hosts that have only the op surface — use "
+                       "it to ground summaries, quote sources (T-153), and "
+                       "re-read for review/challenge. Read-only.",
+        "params": {
+            "root": _ROOT_P,
+            "id": {"type": "string", "required": True,
+                   "description": "Any doc id (source, derived, project, decision).",
+                   "cli": {"positional": True}},
+            "offset": {"type": "integer",
+                       "description": "Character offset to start from (paging)."},
+            "limit": {"type": "integer",
+                      "description": "Max characters returned (default 20000); "
+                                     "`truncated: true` means more remains."},
+        },
+        "handler": lambda root, p: read_doc(root, p["id"],
+                                            offset=p.get("offset") or 0,
+                                            limit=p.get("limit") or 20000),
     },
     "resolve": {
         "help": "resolve a scope to its working-set member ids (a project ∪ "

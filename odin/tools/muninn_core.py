@@ -101,6 +101,7 @@ from muninn.projections import (  # noqa: E402,F401
     _blurb,
     _index_markers,
     drift_worklist,
+    read_doc,
     regenerate_index,
     fingerprint,
     find,

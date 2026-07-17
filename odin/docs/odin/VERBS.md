@@ -312,6 +312,16 @@ Create/update a project page — a curated VIEW, not a folder (ADR-0002/0017). M
 | `--maintained-by <value>` | optional | Maintainer label. |
 | `--tag <value> (repeatable)` | optional | Tags. |
 
+### `read` · MCP `odin_read`
+
+Return a doc's stored text verbatim, paged. For a SOURCE: its readable text (the extracted aid, else a text-native canonical — the same text find/index/derivation read); a bytes-only source returns empty content with text_form 'none' (grounding then needs a model-read of the original bytes — never a guess). For a derived doc/project/decision: the file's content. This is the read half of 'anyone reads, the Core writes' for hosts that have only the op surface — use it to ground summaries, quote sources (T-153), and re-read for review/challenge. Read-only.
+
+| Switch | | What it does |
+|---|---|---|
+| `<id>` | required | Any doc id (source, derived, project, decision). |
+| `--offset <value>` | optional | Character offset to start from (paging). |
+| `--limit <value>` | optional | Max characters returned (default 20000); `truncated: true` means more remains. |
+
 ### `resolve` · MCP `odin_resolve`
 
 Resolve a scope to its working-set member ids — a named project's members ∪ every global view (deterministic set math; SPEC §5.6). Omit `project` for the whole base. The read-side companion synthesize uses to learn its scope.
