@@ -127,6 +127,21 @@ user confirm in one pass:
    For each: `derive` a short landscape summary, **assert the connector** with
    `--connector <system>=<ref>`, and place it (+ its source) in the **`global` view**
    (`… project <root> global --scope global --member …`) so it's always in scope.
+   **Three rules that make the entry real, not just readable (T-175 — learned
+   from the first live orientation, which produced a maximal prose landscape
+   and cleared nothing):**
+   - **The assertion is what clears the orientation debt.** A landscape entry
+     without `--connector` leaves `unmapped_connector_systems` unchanged and
+     the orientation offer re-firing every session, however good the prose.
+   - **Coverage is per `origin.system`, and the strings must match exactly.**
+     One `url=<ref>` assertion covers EVERY web source, present and future;
+     asserting a prettier name (`web=...`) for sources whose system is `url`
+     covers nothing. Check the sources' actual `origin.system` first.
+   - **Map standing wells, never a census.** Entries are the places worth
+     routing a future `explore` back to, each grounded by 1-2 attesting
+     captures. One-off captures get NO entry: their `origin.ref` and the
+     base-wide drift worklist (T-147) already track them fully, and a
+     many-source landscape stales whenever ANY grounding source versions.
 4. **Show the roster and hand off.** `… connectors <root>` prints the computed map; tell the
    user it grows as they ingest and refines on their word. **Never gate `init` on this** —
    offer it, do it on the nod, and a user who declines just has an empty landscape to fill later.

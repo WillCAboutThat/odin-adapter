@@ -67,6 +67,14 @@ machine will see this clone's work missing until pushed.
 
 ## 5. Close report (one short paragraph)
 
+After the git settle, WRITE NOTHING - the report is composed from reads
+(log.md's tail, the lint result you already have). Do not re-run lint after
+the push "to confirm": the pre-settle lint is the verification, and a
+post-push write op would dirty the tree you just settled. (The Core makes a
+re-lint of an unchanged base a no-op on disk, T-174 - but the discipline is
+yours: reads only, after the settle.)
+
+
 From `log.md`'s tail since the session began: what was captured, derived,
 decided, promoted, declined, healed - plus anything left open (pending
 candidates kept, inbox items parked, heals declined, unpushed work). Then

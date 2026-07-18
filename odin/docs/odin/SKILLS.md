@@ -545,6 +545,17 @@ also **pre-flights the candidate
 set** — reachability, redirects, and dedup-preview *across the whole set before any
 ingest* — so a block or redirect surfaces once, up front, not one at a time mid-loop.
 
+**Landscape entries bind through assertions, not prose (T-175).** The
+`--connector` assertion is what clears orientation debt — an entry without one
+leaves the offer re-firing forever. Coverage is per `origin.system` and the
+strings must match the sources' actual system exactly (one `url=<ref>` covers
+every web source, present and future; a prettier alias covers nothing). And the
+landscape maps **standing wells** — places worth routing a future `explore` to,
+each grounded by one or two attesting captures — never a census: one-off
+captures get no entry (their `origin.ref` and the base-wide drift worklist
+already track them), and a many-source landscape stales whenever any grounding
+source versions.
+
 **First-run setup — bootstrap the map from connector awareness.** An enterprise Muninn
 should not be built resource-by-resource. Right after `init`, the adapter — which already
 knows its connectors (MCP/tool self-descriptions) and the repos in reach — **proposes the

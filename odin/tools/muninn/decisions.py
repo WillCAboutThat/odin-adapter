@@ -306,9 +306,23 @@ def record_lint_entry(root, *, ok, n_errors, n_warnings, fingerprint) -> None:
     root = Path(root)
     if not (root / "muninn.yml").exists():
         return
-    _append_log(root, util._now(),
-                f"lint | {'pass' if ok else 'fail'} | {n_errors} errors "
-                f"{n_warnings} warn | fingerprint={fingerprint}")
+    payload = (f"lint | {'pass' if ok else 'fail'} | {n_errors} errors "
+               f"{n_warnings} warn | fingerprint={fingerprint}")
+    # Idempotent (T-174): if the LAST lint entry already records this exact
+    # result, appending again adds zero information (ADR-0005 freshness is
+    # change-based, never time-based) and dirties a just-settled git tree —
+    # the close-session loop: verify after the push, and the verification
+    # itself un-cleans the tree. Re-linting an unchanged base is a no-op on
+    # disk; any real change (fingerprint, counts, verdict) still appends.
+    logp = root / "log.md"
+    if logp.exists():
+        last_lint = None
+        for line in logp.read_text(encoding="utf-8").splitlines():
+            if "] lint | " in line:
+                last_lint = line.split("] ", 1)[1]
+        if last_lint == payload:
+            return
+    _append_log(root, util._now(), payload)
 
 
 def lint_report(root) -> dict:
