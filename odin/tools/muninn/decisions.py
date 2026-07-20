@@ -38,35 +38,39 @@ def _days_old(as_of_str, today_str):
     return (t - a).days
 
 
-def _captures_since_last_lint(root: Path) -> int:
-    """Count `capture` log entries after the most recent `lint` entry — a deterministic
-    'what's arrived since the last check' from the append-only log (ADR-0005 record)."""
+def _log_entries(root: Path):
+    """(timestamp, op) per entry of the append-only ADR-0005 log, in order —
+    the shared parse behind every 'since the last X' status fact."""
     logp = root / "log.md"
     if not logp.exists():
-        return 0
-    entries = [s.strip() for s in logp.read_text(encoding="utf-8").splitlines()
-               if s.strip().startswith("## [") and "]" in s]
-
-    def _op(s):
-        return s.split("]", 1)[1].split("|", 1)[0].strip()
-
-    last_lint = max((i for i, s in enumerate(entries) if _op(s) == "lint"), default=-1)
-    return sum(1 for s in entries[last_lint + 1:] if _op(s) == "capture")
-
-
-def _last_drift_check(root: Path):
-    """Timestamp of the most recent `drift-check` log entry (T-136), or None —
-    the sweep's memory lives in the same append-only ADR-0005 log as lint's."""
-    logp = root / "log.md"
-    if not logp.exists():
-        return None
-    last = None
+        return []
+    out = []
     for s in logp.read_text(encoding="utf-8").splitlines():
         s = s.strip()
         if s.startswith("## [") and "]" in s:
+            ts = s[len("## ["):].split("]", 1)[0]
             op = s.split("]", 1)[1].split("|", 1)[0].strip()
-            if op == "drift-check":
-                last = s[len("## ["):].split("]", 1)[0]
+            out.append((ts, op))
+    return out
+
+
+def _captures_since_last(root: Path, op: str) -> int:
+    """Count `capture` log entries after the most recent `op` entry — a
+    deterministic 'what's arrived since the last check'. Never checked →
+    every capture counts."""
+    entries = _log_entries(root)
+    last = max((i for i, (_, o) in enumerate(entries) if o == op), default=-1)
+    return sum(1 for _, o in entries[last + 1:] if o == "capture")
+
+
+def _last_op(root: Path, op: str):
+    """Timestamp of the most recent `op` log entry, or None — the memory of a
+    deliberate pass (drift-check T-136; map T-177) lives in the same
+    append-only ADR-0005 log as lint's."""
+    last = None
+    for ts, o in _log_entries(root):
+        if o == op:
+            last = ts
     return last
 
 
@@ -171,15 +175,28 @@ def status(root, as_of=None, aging_window_days=_AS_OF_WINDOW_DAYS):
                 covered.add(c["system"])
     unmapped = sorted(base_systems - covered)
 
+    # enrichment-debt facts (T-177 / ADR-0043): how populated the derived-type
+    # layer is, and what has arrived since the last deliberate `map` pass — the
+    # deterministic trigger for the on-load map OFFER (the adapter voices it,
+    # never runs it; the observatory's 50-summaries-zero-entities night is the
+    # gap this signal exists to catch). Facts, not a verdict.
+    enrichment_counts = {"entity": 0, "concept": 0, "question": 0}
+    for d in linter.docs:
+        if d.kind == "derived" and d.data.get("type") in enrichment_counts:
+            enrichment_counts[d.data["type"]] += 1
+
     return {
         "freshness": freshness,
         "fingerprint": current_fp,
         "stale": stale,
         "pending_candidates": list_candidates(root)["pending_count"],
-        "captures_since_lint": _captures_since_last_lint(root),
+        "captures_since_lint": _captures_since_last(root, "lint"),
         "aged": aged,
         "as_of": as_of,
-        "last_drift_check": _last_drift_check(root),
+        "last_drift_check": _last_op(root, "drift-check"),
+        "last_map": _last_op(root, "map"),
+        "captures_since_map": _captures_since_last(root, "map"),
+        "enrichment_counts": enrichment_counts,
         "recoverable_connector_sources": recoverable_connectors,
         "unmapped_connector_systems": unmapped,
         # T-155: whether THIS process context can write the base. False on an

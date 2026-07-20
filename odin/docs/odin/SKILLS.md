@@ -32,7 +32,7 @@ faculties each skill draws on. The user speaks only to Odin.
 The user-facing verbs (ADR-0001, extended by ADR-0009, ADR-0019, ADR-0026,
 ADR-0027, and ADR-0033):
 
-`ingest` · `ask` · `explore` · `find` · `search` · `retrieve` · `why` · `record a decision` · `lint` · `synthesize` · `review` · `review-candidates` · `drift-check` · `challenge`
+`ingest` · `ask` · `explore` · `find` · `search` · `retrieve` · `why` · `record a decision` · `lint` · `synthesize` · `map` · `review` · `review-candidates` · `drift-check` · `challenge`
 
 Operational verbs that maintain the knowledge base (ADR-0004) and its disposable
 indexes (ADR-0027), plus the on-load surface (ADR-0034):
@@ -282,8 +282,27 @@ Optionally a target project (`--project marketing-q3` / "…for the Q3 project")
    full provenance: `sources[]` with hashes and, where possible, spans. Give it a
    `title` and a one-line **`abstract`** for skimming (SPEC §5.2), and author it
    **for findability** (see the discipline below, ADR-0012). Set
-   `status: current`. Where an entity or concept is clearly touched, offer to
-   create/update those derived pages too — each independently grounded.
+   `status: current`. The summary is this step's **whole** derive scope: the
+   enrichment layer (entities / concepts / open questions) is authored by the
+   deliberate `map` verb (§5), never as an ingest side-effect (ADR-0043).
+   Four authoring disciplines bind here (the 2026-07-18 observatory batch,
+   T-178–T-181):
+   - **model-read quarantines origin-carried attribution** (T-178): the doc
+     separates what the reading grounds from what the origin metadata asserts
+     (a filename's author/date), naming the latter as origin-carried — the
+     reading warrants content, only the origin warrants the label;
+   - **the deterministic text layer is preferred and obtainable** (T-180):
+     model-read is for the genuinely opaque; a registry-supported format held
+     back only by a missing dependency gets the dependency (disclosed), not a
+     model reading — `extracted` outranks `model-read`;
+   - **delegation never delegates grounding** (T-179): bulk authoring may fan
+     out, but whatever context authors a summary reads that source's bytes
+     itself; orchestrator checks are validation, voiced as validation, and the
+     delegation is disclosed in the digest;
+   - **intent stays out of the abstract** (T-181): what a doc *is* may be
+     stated when bytes ground it; *why* it sits in the collection is an
+     inference — digest-voiced or body-labeled, never abstract-stated (the
+     ADR-0015 abstract rule, applied to summaries).
 6. **Place it.** Regenerate `index.md` as a deterministic **projection** of
    frontmatter — `title` + `abstract`, sources first, each source joined to its
    summary (SPEC §5.3); no free-text is authored into the index. **Only if the user
@@ -512,6 +531,103 @@ or writes an `insight` unasked.
 
 **Writes (only on validation):** `insight` docs, `see_also` links, `index.md`,
 `log.md`.
+
+**Deliverables — original work product drafted *from* the base (ADR-0044, T-170).**
+When Odin drafts something whose home is *outside* the base — a memo, a grant
+proposal, a set of interview questions, a briefing — the discipline is:
+
+- **Draft at the base, always.** Grounding and citations bind even when the output
+  is destined to depart; drafting away from the base loses the provenance that
+  makes it trustworthy.
+- **Land it typed by what it *is*, not its filename.** A claim-bearing composition
+  (it asserts things about the world) is an **`insight`** — the synthesis rung,
+  per-span cited. An instrument that asserts *nothing* — questions to ask, a
+  checklist, an agenda — is a **`question` doc**: non-assertive, regenerable, and
+  it **ripens as sources arrive** (`regenerate` re-derives it when the answering
+  source lands). Type by what the artifact *does*.
+- **Export the departing copy.** The derived doc is the **warranted master**; the
+  exported `.docx`/email/slide is a **disposable projection** of it. A pure
+  one-shot with no reuse value may skip the landing.
+- **Authorship never mints a source — ratification does.** A deliverable becomes a
+  **`source`** only through an event *in the world* — approval, execution,
+  sending, publication — and what is captured is the **artifact-of-record of that
+  event** (the signed PDF, the sent email, the recorded call's transcript — the
+  ratified version from the system that holds it), **never the working draft**. On
+  ratification the draft's derived doc takes its honest ending: **`supersede --by`
+  the ratified source** (ADR-0041), derivation history kept. Deriving *from* the
+  ratified source is then legitimate and **not** chaining (it is a source); the
+  warranty stays honest — *"faithfully what the approved brief says,"* never *"its
+  claims are true"* (challenge/drift govern truth, as ever).
+- **Never capture a working draft as a source** — that launders a derived doc into
+  ground truth, and every later derivation would chain on it invisibly (the
+  intra-base twin of the T-165 forbidden shortcut). *Worked case: interview
+  questions drafted from the base land as a `question` doc and never become a
+  source; the **call** where they were asked does — captured as its transcript.*
+
+### `map [--project <id> | <doc-id>]`
+
+**Intent:** "Chart what the sources hold." Author the **derived-type layer** —
+entities, concepts, and open questions — as a **deliberate, consented pass**
+(ADR-0043). The natural sibling of `synthesize`: synthesize proposes
+*connections* (insights); `map` proposes *structure*. Ingest never authors this
+layer (§4 step 5 is exactly one summary per source): the former optional
+side-gate demonstrably under-fired — 50 rich single-subject sources produced 50
+summaries and zero entities — so the act now has its own verb, its own trigger,
+and its own on-load offer.
+
+**Scope:** **whole base by default** (the bare batch-ingested base is exactly
+the case a narrower default would miss); `--project` or a named doc narrows.
+The `scope: global` hub is always unioned in (SPEC §5.6).
+
+**Behavior:** discover candidates via the legible layer (`index.md`, abstracts),
+then **ground every proposal in the actual sources** (I2/I3 — authoring from a
+summary is chaining). The type contract keeps the layer from duplicating
+ADR-0012 findability facets:
+
+- an **entity** is a **cross-source join key** — stable identity, aliases,
+  relationships, membership across two or more sources (or one source plus a
+  clearly recurring role) — never a facet's findability text restated as a doc;
+  a name mentioned once and fully covered by its summary earns **no** entity,
+  and skipping it is correct, not debt;
+- a **concept** is a recurring idea whose one-place explanation multiple
+  summaries would otherwise half-repeat;
+- a **question** is the **proactive sweep** of what the sources raise but do
+  not settle — same doc type and **"OPEN — "** abstract convention as the
+  synthesize gap path (T-154), so the index doubles as the open-questions
+  register and `regenerate` re-derives the answered form later.
+
+**Consent (the manifest):** the pass proposes as **one itemized offer** — every
+proposed doc on one line (id · title · joined sources · a verbatim quoted span
+per claim-bearing line, T-153) — the user **strikes items, then nods once**.
+Never per-doc consent theater (unusable at pass scale), never a silent write.
+On the nod each doc is written via `derive`, and the Core
+**containment-verifies the quoted spans in these types** (the T-153 gate,
+widened by T-177) — the manifest skim can trust the per-doc evidence because
+fabrication is refused at the write seam. The gate verifies the *bricks*; the
+**join an entity or concept makes is an arch** — so before writing each doc run
+the ADR-0015 composition self-check *"do the sources state this join, or do I?"*
+(`map` is the **highest-arch-risk** verb: entities and concepts *are* cross-source
+joins), dropping or labelling any membership, alias, or recurrence the sources
+don't actually state. The linter cannot catch an over-reaching join; only this
+can.
+
+**Proactive (on load).** `status` carries the deterministic enrichment-debt
+facts: `captures_since_map` (captures after the last logged pass),
+`last_map`, and `enrichment_counts`. Debt → **offer** the pass, once; **never
+map unasked** (a real token spend — proposing-not-writing extends to
+proposing-not-scanning, as with synthesize).
+
+**Close:** log the pass's memory — `map-log [--scope <what>] --entities N
+--concepts N --questions N` (**log even a nothing-warranted pass**: "checked,
+nothing earned a doc" is what spares the next session re-deriving it) — then
+the usage record (`usage-log map --scope <ids read>`, §7 rules).
+
+**Never:** authors during ingest, writes without the nod, proposes a doc it
+cannot quote, asserts by arrangement a join (identity, membership, recurrence)
+the sources don't state, or mints an entity a summary facet already fully serves.
+
+**Writes (only on the nod):** `entity` / `concept` / `question` docs,
+`index.md`, `log.md`.
 
 ### `explore <target>`
 
@@ -969,9 +1085,13 @@ for a whole-source capture, via **`anchor-check`** for an anchored partial
 capture (ADR-0039: identity first — a `git-blob` anchor is byte-certain against
 a remote with **zero fetch** — then containment of the excerpt's chunks;
 `upstream-changed-region-intact` reports as *current*, because an unrelated
-edit elsewhere in the whole is not staleness). A hash mismatch that
-normalizes away (`same-after-newline-normalization`, T-140) is reported as an
-artifact in the *same* column, never drift. An **unanchored** excerpt is the
+edit elsewhere in the whole is not staleness). A hash mismatch the Core can
+dissolve — `same-after-newline-normalization` (T-140: CRLF/LF) or
+`same-after-extraction` (T-171: an HTML/PDF whose bytes moved but whose
+deterministically-extracted text is identical — ad/analytics/chrome furniture the
+extractor already drops) — is reported as an artifact in the *same* column, never
+drift; a furniture-only change to *visible* text stays the adapter's labeled
+judgment, never a Core `same-*` verdict. An **unanchored** excerpt is the
 honestly hedged case, and the consented **`anchor`** backfill is offered
 (containment verified before anything is stamped); a refusal is handled with
 evidence (extract the verbatim chunks, verify presence, then force with the
@@ -1031,6 +1151,21 @@ setup" ADR-0002 anticipated. **Soft-warn tool-repo guard (ADR-0032):** if the ta
 is inside ODIN's own checkout, `init` returns `action: "warn"` and writes nothing —
 the caller re-runs elsewhere, or passes `--allow-tool-root` to scaffold there anyway
 (the consented op proceeds; surface, don't block).
+
+**Plugin-declaration pointer (consented, never scaffolded; ADR-0022, T-173).** A git-backed
+base opened later in a Claude Code cloud session arrives tool-less — the plugin
+isn't installed, so the `odin_*` tools are absent (the base still works unequipped:
+prose carries the session and `lint` verifies it clean — the pointer is convenience,
+never a dependency). Odin may **offer**, per git-backed base, to commit a
+`.claude/settings.json` declaring the odin-adapter marketplace + `odin@odin-adapter`
+so future cloud sessions install the tools at startup — **with the tradeoff voiced**
+(*"opening this repo auto-installs the plugin with **no trust prompt**; decline if
+cloners shouldn't inherit that"*). It is an **adapter write, never a Core op**, and
+**never scaffolded by default**: a host-agnostic format must not bake Claude-specific
+glue into every base (ADR-0008), and a tool that arranges its own install into
+everything it touches is the **self-replication** the trust posture forbids (T-155).
+The Claude-Code member of the **pointer-not-dependency** family (T-167/T-168); Codex
+ignores `.claude/` — unbroken, just unserved.
 
 ### `regenerate <id>`
 
@@ -1114,7 +1249,9 @@ opened, composing the signals worth raising into a single result the adapter ren
 as **one consolidated nudge** (not competing prompts — T-103): `freshness`
 (never-linted / fresh / drifted, the ADR-0005 fingerprint vs. the last `lint`),
 `stale` (derived docs whose source hash advanced — the L4 condition), `pending_
-candidates` (ADR-0033), `captures_since_lint` (feeds the synthesize offer), and
+candidates` (ADR-0033), `captures_since_lint` (feeds the synthesize offer),
+`captures_since_map` / `last_map` / `enrichment_counts` (the enrichment-debt
+facts feeding the map offer — ADR-0043), and
 `aged` (time-relative `as_of` docs older than the window — T-104). It is a **pure
 function of `(bytes, as_of)`** — `as_of` (today) is injected, never wall-clock — so it
 stays faithful and reproducible-given-inputs; it writes nothing. **Time enters here,

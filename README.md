@@ -123,6 +123,29 @@ codex plugin add odin@odin-adapter
 Verify the server with `codex mcp list` (Codex loads MCP tools lazily; asking
 the model to list tools can say none while the server runs fine).
 
+## Install: Claude Code cloud environments (claude.ai/code)
+
+Cloud containers are ephemeral: the per-user plugin install is wiped with every
+container, and the `odin-core` MCP server is spawned **once, at session start**,
+so a plugin that finishes installing mid-session loads its skills (those
+hot-load) but never its MCP tools. Provision **before the session boots** by
+adding this to your environment's **setup script** (claude.ai/code >
+Environments > your environment):
+
+```bash
+command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+claude plugin marketplace add WillCAboutThat/odin-adapter --scope user
+claude plugin install odin@odin-adapter --scope user
+```
+
+Every session in that environment then boots with the full stack live. Two
+complements, both worth keeping: a knowledge-base repo can also declare the
+plugin in a committed `.claude/settings.json` (installs at session start when
+the repo is opened; the right mechanism for local clones and shared repos),
+and if the plugin ever lands only mid-session, Odin still runs complete on the
+skill + Core-CLI path by design - the MCP tools are an accelerator, never a
+dependency.
+
 ## First use
 
 Start (or reload) a session; the `odin-core` MCP server auto-starts. Then just
@@ -214,6 +237,7 @@ There are no commands to learn; you talk, and these are the verbs underneath:
 | *"why did we choose X?"* | `why` | The recorded decision and its rationale, cited. |
 | *"record a decision: we're going with Y"* | `record a decision` | Your call, authored onto the record (yours, not derived). |
 | *"what connects across our sources?"* | `synthesize` | Proposed cross-source insights, grounded and cited, written only on your nod. |
+| *"chart the people, ideas, and open questions in here"* | `map` | One itemized proposal of entities, concepts, and open questions across the sources: strike what you don't want, approve once. Never runs as an ingest side-effect. |
 | *"re-check our conclusions against the sources"* | `review` | An adversarial re-check of derived docs against the source bytes; read-only, advisory. |
 | *"review the pending pile"* | `review-candidates` | Batch-admit or decline the inferences Odin staged while reasoning; declines are remembered, never re-nagged. |
 | *"is that actually true? play devil's advocate"* | `challenge` | Adversarial second opinion on one claim — the sources re-read skeptically, the world searched for counter-evidence on your word; findings offered, never auto-written. |

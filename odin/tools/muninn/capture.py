@@ -387,7 +387,8 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
     does the deterministic rungs only, and **no AI ever computes a hash**.
 
     Returns: ``{"status": "already-captured"|"changed"|"new"
-                          |"same-after-newline-normalization",
+                          |"same-after-newline-normalization"
+                          |"same-after-extraction",
                 "method": "content-hash"|"origin.ref",
                 "match_id": <id or None>, "content_hash": <hex or None>}``
 
@@ -395,6 +396,19 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
     *changed* by raw hash, but the matched source's binary-hashed text-like
     canonical differs ONLY by CRLF/LF line endings — a fetch-method artifact,
     not drift. Comparison-side only; stored hashes are untouched.
+
+    ``same-after-extraction`` (T-171): the candidate would read *changed* by raw
+    hash, but running the SAME deterministic extractor (ADR-0010) over the stored
+    canonical and the fetched bytes yields **identical text** — page furniture
+    changed (ads, analytics, dynamic chrome; the HTML extractor already drops
+    ``script``/``style``/``head``), the readable content did not. A COMPUTED verdict,
+    exactly parallel to the newline rung and reported the same way; the extractor is
+    faithful, not inference, so this stays Core (a re-capture-as-version over an ad
+    rotation is the churn it spares). Comparison-side only; stored bytes are
+    untouched. Visible-text chrome (nav/footer/ad *text*) is KEPT by the extractor
+    by design, so a rotated sidebar headline still reads ``changed`` — the residual
+    "furniture-only" judgment on *visible* text is the adapter's to voice, never a
+    Core verdict.
     """
     root = Path(root)
     if id is not None:
@@ -452,6 +466,28 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
             return False           # genuinely binary — nothing to normalize
         return _lf(held).lstrip("﻿") == _lf(fetched).lstrip("﻿")
 
+    def _extracted_same(child, meta):
+        """The T-171 rung: the fetched bytes read *changed* by raw hash, but the
+        SAME deterministic extractor (ADR-0010) yields identical text over the
+        stored canonical and the fetched bytes — a furniture-only change, not
+        drift. Only fires for a binary-suffix canonical with a registered
+        extractor (HTML/PDF/…); text canonicals are their own aid (the newline
+        rung's job) and bytes-only sources have no extractor to compare. Faithful,
+        not inference (the extractor is deterministic), so it stays Core;
+        comparison-side only, stored bytes are untouched."""
+        canonical = current_canonical(child, meta)
+        if canonical is None or canonical.suffix.lower() in TEXT_SUFFIXES:
+            return False
+        ex = extractors.for_format(canonical.suffix.lower())
+        if ex is None:
+            return False           # bytes-only source — no extractor to compare
+        try:
+            held = ex.extract(canonical.read_bytes())
+            fetched = ex.extract(raw)
+        except Exception:
+            return False           # extractor failed either side — honestly "changed"
+        return _lf(held) == _lf(fetched)
+
     for child, meta in _metas():
         if meta.get("content_hash") == h:
             return {"status": "already-captured", "method": "content-hash",
@@ -462,6 +498,9 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
         if _newline_only(sources / id, meta):
             return {"status": "same-after-newline-normalization",
                     "method": "content-hash", "match_id": id, "content_hash": h}
+        if _extracted_same(sources / id, meta):
+            return {"status": "same-after-extraction",
+                    "method": "content-hash", "match_id": id, "content_hash": h}
         return {"status": "changed", "method": "content-hash",
                 "match_id": id, "content_hash": h}
 
@@ -470,6 +509,11 @@ def dedup_check(root, *, id=None, source_file=None, raw=None, filename=None,
             if (meta.get("origin") or {}).get("ref") == origin_ref:
                 if _newline_only(child, meta):
                     return {"status": "same-after-newline-normalization",
+                            "method": "origin.ref",
+                            "match_id": meta.get("id", child.name),
+                            "content_hash": h}
+                if _extracted_same(child, meta):
+                    return {"status": "same-after-extraction",
                             "method": "origin.ref",
                             "match_id": meta.get("id", child.name),
                             "content_hash": h}

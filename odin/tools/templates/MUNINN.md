@@ -158,6 +158,11 @@ It returns everything worth raising on load, computed deterministically:
   synthesize** offer: you may **offer**, once, to look for the connections they form.
   Offer only; **never run `synthesize` unasked** (it spends real tokens, so
   proposing-not-writing extends to proposing-not-scanning).
+- **captures since last map** (or a never-mapped base with sources and an empty
+  enrichment layer) → the **map** offer: you may **offer**, once, to propose the
+  entities, concepts, and open questions the sources hold (ADR-0043). Offer
+  only; **never run `map` unasked** — and the enrichment layer is authored ONLY
+  by that deliberate pass, never as an ingest side-effect.
 - **pending candidates** — inferences you staged awaiting review → **offer**, once,
   to run **`review-candidates`**. This is the reliable review moment: it rides this
   on-load read, needs no session-end hook (there is no dependable way to intercept a

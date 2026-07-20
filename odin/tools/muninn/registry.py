@@ -12,7 +12,7 @@ from . import util  # noqa: E402  (module-attr access = the patch point)
 from .candidates import decline_candidate, list_candidates, promote_candidate, stage_candidate  # noqa: E402
 from .capture import anchor, anchor_check, capture, capture_file, capture_repo, dedup_check, log_drift_check, retier, source_status  # noqa: E402
 from .decisions import lint_report, record_decision, status  # noqa: E402
-from .derive import log_challenge, relink, stamp_derived, supersede, write_derived  # noqa: E402
+from .derive import log_challenge, log_map, relink, stamp_derived, supersede, write_derived  # noqa: E402
 from .projections import connector_projection, drift_worklist, find, fingerprint, read_doc, regenerate_index, reproject, resolve_scope, write_project  # noqa: E402
 from .scaffold import init  # noqa: E402
 from .usage import _source_bytes, log_usage, usage_html, usage_log, usage_report  # noqa: E402
@@ -811,6 +811,38 @@ OPS = {
         "handler": lambda root, p: log_challenge(root, p["target"],
                                                  outcome=p["outcome"],
                                                  detail=p.get("detail")),
+    },
+    "map-log": {
+        "help": "record a completed map pass in the append-only log (the "
+                "enrichment pass's memory; T-177)",
+        "description": "Append a completed map pass (entity/concept/question "
+                       "docs written + the scope it covered) to log.md — "
+                       "`status` reads the latest entry for `last_map` and "
+                       "counts captures arriving after it "
+                       "(`captures_since_map`), the deterministic "
+                       "enrichment-debt facts behind the on-load map offer "
+                       "(ADR-0043). Log even a pass that wrote nothing: "
+                       "'checked, nothing warranted' is worth remembering.",
+        "params": {
+            "root": _ROOT_P,
+            "scope": {"type": "string",
+                      "description": "What the pass covered — 'base' "
+                                     "(default), a project id, or a doc id."},
+            "entities": {"type": "integer",
+                         "description": "Entity docs written this pass."},
+            "concepts": {"type": "integer",
+                         "description": "Concept docs written this pass."},
+            "questions": {"type": "integer",
+                          "description": "Question docs written this pass."},
+            "detail": {"type": "string",
+                       "description": "One optional line of context (e.g. "
+                                      "items struck from the manifest)."},
+        },
+        "handler": lambda root, p: log_map(root, scope=p.get("scope"),
+                                           entities=p.get("entities"),
+                                           concepts=p.get("concepts"),
+                                           questions=p.get("questions"),
+                                           detail=p.get("detail")),
     },
     "supersede": {
         "help": "mark a derived doc superseded (the honest ending; reversible "

@@ -19,6 +19,9 @@ from .util import _append_log, _dump_yaml, _load_yaml, _locked, _valid_id  # noq
 # --------------------------------------------------------------------------- #
 _TYPE_DIR = {"summary": "summaries", "entity": "entities", "concept": "concepts",
              "question": "questions", "insight": "insights"}
+# quoted-span containment (T-153) applies to insights and, since T-177, the map
+# products — every adapter-proposed type approved from a manifest, not summaries
+_QUOTE_GATED_TYPES = {"insight", "entity", "concept", "question"}
 
 
 def stamp_derived(root):
@@ -221,9 +224,13 @@ def write_derived(root, id, *, body, sources, type="summary", title,
                 f"only in sources (I3, no chaining)")
         prov.append({"id": sid, "hash": _load_yaml(meta_p).get("content_hash")})
 
-    if type == "insight":
+    if type in _QUOTE_GATED_TYPES:
         # T-153(d): an insight is the least deterministic derivation — its
         # claimed verbatim quotes are the evidence the write seam CAN verify.
+        # T-177 widens the gate to the map products (entity/concept/question):
+        # they are approved from a manifest skim, so the per-doc evidence must
+        # hold without the user re-reading every source. Summaries keep their
+        # current seam (out of T-177's scope).
         _, problems = verify_quoted_spans(root, body, sources)
         if problems:
             detail = "; ".join(f'"{s}…" cited to {", ".join(c)}' for s, c in problems[:3])
@@ -406,3 +413,27 @@ def log_challenge(root, target, *, outcome, detail=None):
         line += f" | {detail}"
     _append_log(root, when, line)
     return {"target": target, "outcome": outcome, "logged_at": when}
+
+
+# --------------------------------------------------------------------------- #
+# map-log — the enrichment pass's memory (ADR-0043, T-177)
+# --------------------------------------------------------------------------- #
+def log_map(root, *, scope=None, entities=None, concepts=None, questions=None,
+            detail=None):
+    """Record a completed **map** pass in the append-only log (the drift-log
+    precedent). The log is the pass's memory: `status` reads the latest entry
+    for `last_map` and counts captures arriving after it (`captures_since_map`)
+    — the deterministic enrichment-debt facts behind the on-load offer
+    (ADR-0043). A pass that wrote nothing still logs: "checked, nothing
+    warranted" is information the next session should not re-derive.
+    """
+    root = Path(root)
+    scope = (str(scope).strip() if scope else "") or "base"
+    e, c, q = int(entities or 0), int(concepts or 0), int(questions or 0)
+    line = f"map | scope={scope} entities={e} concepts={c} questions={q}"
+    if detail:
+        line += f" | {detail}"
+    when = util._now()
+    _append_log(root, when, line)
+    return {"logged_at": when, "scope": scope,
+            "entities": e, "concepts": c, "questions": q}

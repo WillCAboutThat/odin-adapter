@@ -77,6 +77,12 @@ def render(root, st):
     if st["captures_since_lint"]:
         signals.append("%d capture(s) since last lint → may offer (once) to synthesize"
                        % st["captures_since_lint"])
+    if st.get("captures_since_map"):
+        signals.append("%d capture(s) since the last map pass%s → may offer (once) "
+                       "to map the enrichment layer (entities/concepts/questions, "
+                       "ADR-0043)"
+                       % (st["captures_since_map"],
+                          " (never mapped)" if st.get("last_map") is None else ""))
     if st["pending_candidates"]:
         signals.append("%d pending candidate(s) → may offer (once) review-candidates"
                        % st["pending_candidates"])

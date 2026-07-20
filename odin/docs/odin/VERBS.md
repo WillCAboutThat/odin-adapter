@@ -276,6 +276,18 @@ Record a completed challenge in the append-only log (ADR-0040): 'challenge | <ta
 | `--outcome <value>` | required | What the challenge concluded. One of: survived, weakened, refuted. |
 | `--detail <value>` | optional | One line of context (what was checked, what was recorded). |
 
+### `map-log` · MCP `odin_map_log`
+
+Append a completed map pass (entity/concept/question docs written + the scope it covered) to log.md — `status` reads the latest entry for `last_map` and counts captures arriving after it (`captures_since_map`), the deterministic enrichment-debt facts behind the on-load map offer (ADR-0043). Log even a pass that wrote nothing: 'checked, nothing warranted' is worth remembering.
+
+| Switch | | What it does |
+|---|---|---|
+| `--scope <value>` | optional | What the pass covered — 'base' (default), a project id, or a doc id. |
+| `--entities <value>` | optional | Entity docs written this pass. |
+| `--concepts <value>` | optional | Concept docs written this pass. |
+| `--questions <value>` | optional | Question docs written this pass. |
+| `--detail <value>` | optional | One optional line of context (e.g. items struck from the manifest). |
+
 ### `supersede` · MCP `odin_supersede`
 
 Mark a derived document SUPERSEDED (ADR-0041) — the honest ending: status: superseded + a one-way pointer (superseded_by) and/or a reason, stamped superseded_at. Consented, logged, idempotent; touches only these machine fields (provenance and authored content untouched, so everything still verifies). A superseded doc still lints, stays in the index badged, is exempt from L4 staleness, and is skipped by find unless asked. Derived docs only: never sources (immutable, versioned) or decisions (their own supersession record). lift=true reverses a mistaken mark. Use when a claim is refuted (challenge), a doc was mis-filed and re-recorded, or a better derivation replaced it — never a hand-edit, never a delete.

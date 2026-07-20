@@ -74,6 +74,7 @@ from muninn.capture import (  # noqa: E402,F401
 )
 from muninn.derive import (  # noqa: E402,F401
     log_challenge,
+    log_map,
     relink,
     _TYPE_DIR,
     stamp_derived,
@@ -116,7 +117,7 @@ from muninn.decisions import (  # noqa: E402,F401
     record_lint_entry,
     _AS_OF_WINDOW_DAYS,
     _days_old,
-    _captures_since_last_lint,
+    _captures_since_last,
     status,
     _source_version,
     record_decision,

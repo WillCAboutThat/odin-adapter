@@ -96,6 +96,25 @@ Find a `muninn.yml` at or above the working directory (or a path the user gives)
     (`integrity.derived_self_hash`); the user can flip it there or ask you to — and you
     can `stamp` an existing base to bring older docs under it. Don't gate `init` on an
     answer; inform, and let off-by-default proceed.
+  - **Offer the plugin-declaration pointer — consented, never scaffolded (git-backed
+    bases; ADR-0022, T-173).** A git-backed base opened later in a **Claude Code cloud session**
+    arrives tool-less: the plugin isn't installed, so the `odin_*` tools are absent.
+    The base still *works* — prose carries an unequipped session and `lint` verifies it
+    clean; the pointer is **convenience, never a dependency**. For a git-backed base you
+    may **offer** to commit a `.claude/settings.json` declaring the odin-adapter
+    marketplace + `odin@odin-adapter`, so future cloud sessions install the tools at
+    startup. **Voice the tradeoff at the moment of choice:** *"sessions opening this repo
+    will auto-install the plugin (a cloud install runs with **no trust prompt**) —
+    decline if others clone this base and shouldn't inherit that."* It is an **adapter
+    write, never a Core op** (host bindings are adapter territory; the Core writes format
+    only), and **never scaffolded by default**: a host-agnostic format must not bake
+    Claude-specific glue into every base (ADR-0008), and a tool arranging its own install
+    into everything it touches is the **self-replication** the trust posture forbids
+    (T-155). It is the Claude-Code member of the **pointer-not-dependency** family
+    (T-167/T-168: `MUNINN.md` for humans, `llms.txt` for generic agents, `settings.json`
+    for Claude Code — each a pointer, none load-bearing); Codex ignores `.claude/` —
+    unbroken, just unserved until a symmetric offer exists. Offer, never gate; a decline
+    proceeds.
 
 ## Orient the base — bootstrap or repair the resource landscape
 
@@ -275,9 +294,14 @@ base state duplicates what the `connectors` projection computes live).
    confirms it is genuinely a different source sharing the locator. Capture needs
    no approval — the user asked you to remember it (ADR-0007) — but confirm before
    storing anything that looks like secrets or personal data.
-3. **Derive** (your judgment). Read the source and write grounded docs: a
-   **summary** (always — see below), plus **entities / concepts / questions /
-   insights** where the material clearly warrants. For each: a short `title`, a
+3. **Derive** (your judgment). Read the source and write its grounded
+   **summary** (always — see below). That one summary per source is ingest's
+   **whole** derive scope: the enrichment layer (entities / concepts / open
+   questions) is authored by the deliberate **`map`** verb (its section is
+   beside *Synthesize*), and insights by `synthesize` — never as a per-source
+   side judgment here (ADR-0043: the optional "where warranted" gate
+   systematically under-fired, so batch ingest is now predictable — one
+   summary each, nothing to weigh). For each doc you derive: a short `title`, a
    one-line `abstract`, and a body that **cites the source** inline as a
    **linked citation** (ADR-0038) — the id as label, the source's readable file
    as target: `… [src-<slug>](../sources/src-<slug>/source-text.md)` (or the
@@ -299,6 +323,28 @@ base state duplicates what the `connectors` projection computes live).
      understanding, not OCR: capture stays deterministic and AI-free; the reading
      is a *derive*-step act, and the model-read summary is now how that source is
      findable at all.
+     - **Quarantine origin-carried attribution (T-178).** In the doc itself,
+       separate what the reading grounds (what the bytes or pixels actually
+       show) from what rides on origin metadata — a filename's author or date,
+       the ref. Name the latter as origin-carried (*"attribution carried by the
+       file's origin (not read from the image content): …"*), never state it as
+       something the reading found. The reading warrants the content; only the
+       origin warrants the label — and a mislabeled file is exactly where the
+       difference bites.
+   - **Prefer the deterministic text layer — obtain it when obtainable (T-180).**
+     Model-read is for the *genuinely* opaque (images, scans). If a format the
+     extractor registry supports arrived bytes-only merely because a dependency
+     was missing, obtaining the dependency — and disclosing that you changed the
+     environment, in the digest — beats model-reading a document that was one
+     install from faithful: `extracted` outranks `model-read` on the assurance
+     ladder. If the attempt breaks something, restore the working state and say
+     so; never leave the environment silently altered.
+   - **Scale by delegation — never delegate grounding (T-179).** In a bulk
+     ingest you may fan authoring out to subagents, but grounding is per-doc
+     and non-delegable: whatever context authors a summary must itself read
+     that source's actual bytes or text aid. Orchestrator-side checks are
+     *validation*, and are voiced as such — "validated" is not "re-read against
+     the source" — and the digest discloses that authoring was delegated.
    - **Every source gets a summary (L15, an error).** A captured source with no
      summary is an unfindable gap the linter flags. Never leave one un-summarised;
      if you meet an old one, heal it (see **Regenerate**).
@@ -306,6 +352,13 @@ base state duplicates what the `connectors` projection computes live).
      chaining — don't try it).
    - **Never fabricate.** If a fact isn't in the source, don't state it. A missing
      defining input is a question to the user, not a guess.
+   - **Intent stays out of the abstract (T-181).** What a document *is* may be
+     stated when the bytes ground it (*"contains no mention of X"*, *"actually
+     Pinchot's text under a Muir header"*). *Why* it exists in the collection —
+     a "distractor", a plant, a test — is your inference about someone's
+     intent: voice it to the user in the digest, or label it in the body as
+     your own observation; never state it as fact in the abstract, the
+     most-skimmed span (the ADR-0015 abstract rule, applied to summaries).
    - **Author for findability (ADR-0012).** `find` is literal substring, so write
      the summary in the **reader's vocabulary, not just the source's** — add
      `Covers`/`Answers` facets that phrase the questions someone would actually
@@ -558,6 +611,18 @@ of `ask`/`synthesize`. Odin is the scribe, not the author.
 1. **Author the ADR-shaped body** — Context · Decision · Consequences — in the
    owner's terms. Cite informing sources inline as linked citations
    `[src-…](../sources/src-…/source-text.md)` (ADR-0038).
+   - **The composition can lie even in an authored decision (ADR-0015).** The
+     bricks are the owner's words; the *arch* is your tidying of them. When the
+     owner bundles several sources in one breath ("the trailhead and
+     seasonal-closure footing across both"), resist splitting it into a clean
+     one-source-per-clause structure that reads tidier than the evidence. Run
+     the per-clause self-check **before writing** — *"does **this** cited source
+     state this, or am I tidying?"* A reader-vocabulary gloss (ADR-0012) is
+     welcome, but attach it to the source that actually carries the word: a term
+     the cited source never uses belongs on its sibling, or left unattached —
+     never split one-to-one onto the source that happens to sit beside it. The
+     linter cannot catch this (every evidence link still resolves and provenance
+     stays intact); only this discipline does.
 2. **Write it through the Core** (the Core owns the write; you never hand-edit):
    `python <ODIN>/tools/muninn_core.py record-decision <root> dec-<slug>
    --title "<t>" --status accepted [--evidence src-A --evidence src-B] --file <body>`
@@ -622,7 +687,11 @@ of `ask`/`synthesize`. Odin is the scribe, not the author.
 5. **Crystallize (optional).** If the answer is reusable, offer to save it as a
    `question` doc via `derive --type question` — grounded and cited. Offer; don't
    clutter unasked. Never treat a derived doc as ground truth without the sources
-   behind it.
+   behind it. **A crystallized answer composes multiple sources, so run the
+   composition self-check before writing (ADR-0015):** *"do the sources state
+   this, or do I?"* — the durable question doc must not assert by arrangement what
+   no cited span states; an ephemeral chat answer that overreached is harmless, one
+   written into the base is not.
 6. **Log the run — the close step, every time (T-152).**
    `… usage-log <root> ask --scope <the ids you actually read> [--tokens N]` —
    the Core can't see this verb, so the record is the only way `usage` measures
@@ -691,6 +760,9 @@ competing prompts (that's the nagging we avoid):
 
 - `freshness: drifted|never-linted` → suggest `lint`.
 - `captures_since_lint > 0` → **offer** (once) to `synthesize` — never unasked.
+- `captures_since_map > 0` — or `last_map` null with sources present and
+  `enrichment_counts` all zero → **offer** (once) to `map` the enrichment
+  layer (ADR-0043) — never unasked.
 - `pending_candidates > 0` → **offer** (once) to `review-candidates`.
 - `stale` ids → offer `regenerate`.
 - `aged` (time-relative `as_of` docs past the window) → note they may have drifted.
@@ -767,8 +839,20 @@ with no connectivity forever, ADR-0008; reaching is Huginn's consented act).
    - **Whole-source capture:** `… dedup-check <root> --source-file <fetched>
      --id <src-id>` → *already-captured* (same) / *changed* /
      *same-after-newline-normalization* (T-140: a code/text file whose fetch
-     differs only by CRLF/LF line endings — report it in the **same** column,
-     named as an artifact, never as drift). You never hash or eyeball-diff.
+     differs only by CRLF/LF line endings) / *same-after-extraction* (T-171: an
+     HTML/PDF page whose bytes moved but whose **extracted text is identical** —
+     page furniture: ads, analytics, dynamic chrome, the `script`/`style`/`head`
+     the deterministic extractor already drops). Both `same-after-*` verdicts are
+     **computed by the Core** and reported in the **same** column, named as the
+     artifact, never as drift. You never hash or eyeball-diff.
+   - **The furniture residual on *visible* text is yours to voice, never a Core
+     verdict (T-171).** `same-after-extraction` fires only when the extracted text
+     is byte-identical; visible-text chrome the extractor keeps by design (a
+     rotated sidebar headline, a changed nav label) still reads *changed*. If you
+     judge such a change furniture-only, you may **say so — as judgment, offered**
+     (*"the only change is a rotated promo headline — re-capture?"*), but never log
+     it as a deterministic `same-*` verdict. Inference stays labeled; the Core's
+     column stays faithful.
    - A locator-only reference source gets a reachability check; a
      stand-in-bodied one compares against the stand-in — **say so** when
      reporting it. An **unanchored excerpt** (partial capture, no identity)
@@ -990,6 +1074,110 @@ on a derived-only change (a `regenerate` adds nothing new to connect).
    — a synthesize that skips this is invisible to `usage` (the 2026-07-16 ledger
    read found exactly that); rules: *Usage-logging rules* below.
 
+## Map (the enrichment layer — a deliberate pass, never an ingest side-effect; ADR-0043)
+
+`map` is `synthesize`'s sibling: synthesize proposes **connections** (insights);
+`map` proposes the **derived-type layer** — the entities, concepts, and open
+questions latent across sources. Ingest never authors these (its derive scope is
+exactly the summary); they are authored here, on the user's word. The verb
+exists because the optional path demonstrably under-fires: 50 rich
+single-subject sources once produced 50 summaries and zero entities — an
+optional per-source judgment call is structurally skipped, so the act is
+deliberate now.
+
+1. **Resolve scope.** Default is the **whole base**; `--project <id>` or a
+   named doc narrows. Same `resolve` call as synthesize — the `scope: global`
+   hub is always unioned in.
+2. **Discover via the legible layer; ground in sources (I2/I3).** Skim
+   `index.md` and abstracts for candidates, then **read the actual sources** to
+   ground every proposal — never author from a summary (chaining; the Core
+   rejects it). What earns a doc:
+   - **Entity — a cross-source join key, never a findability duplicate.** A
+     summary facet already answers *"who is Galen Clark"* (ADR-0012); an
+     `ent-` doc earns its place only by carrying what a facet cannot — stable
+     identity and aliases, relationships, membership across **two or more
+     sources** (or one source plus a clearly recurring role). Someone mentioned
+     once, fully covered by their summary → **no entity; skipping is correct,
+     not debt.**
+   - **Concept — a recurring idea that spans sources** (a clause pattern, a
+     method, a theme): the one-place explanation multiple summaries would
+     otherwise each half-repeat, `see_also`-linkable from all of them.
+   - **Question — the proactive sweep** of what the sources raise but don't
+     settle. Generalizes the synthesize gap path (T-154): same doc type, same
+     **"OPEN — "** abstract convention, so the index doubles as the
+     open-questions register; `regenerate` re-derives it answered when the
+     resolving source lands.
+3. **Propose as ONE manifest — strike-outs welcome, one nod.** Present the
+   whole pass as a single itemized offer — *"12 entities · 3 concepts · 2 open
+   questions — write them?"* — each item one line: proposed id · title · the
+   sources it joins · a **verbatim quoted span** for each claim-bearing line
+   (T-153). The user strikes items, then approves **once**. Never per-doc
+   consent theater; never a silent write.
+4. **Write on the nod** via `derive --type entity|concept|question`, each doc
+   grounded in its own sources with per-span linked citations (ADR-0038). The
+   Core **containment-verifies every quoted span** in these types (the T-153
+   gate) and refuses fabrication — the manifest skim can trust the evidence.
+   - **The join is an arch — run the composition self-check on it (ADR-0015).**
+     The T-153 gate verifies each quoted span (the *bricks*); it cannot see the
+     claim made by *arrangement* — that these spans name one identity, that a
+     membership spans those sources, that a concept recurs across them. Before
+     writing each doc, ask **"do the sources state this join, or do I?"** A
+     cross-source membership no single source attests, an alias equating two
+     names the sources never equate, a concept knitted from incidental
+     co-occurrence — drop it, or label it the inference it is. `map` is the
+     **highest-arch-risk verb** (entities and concepts *are* cross-source
+     joins), so it carries the same discipline `synthesize` and `record-decision`
+     do — the linter cannot catch an over-reaching join; only this can.
+   Then `index` + `lint` — 0 errors.
+5. **Log the pass — both records, every time.** The pass's memory:
+   `… map-log <root> [--scope <what>] --entities N --concepts N --questions N`
+   — `status` computes enrichment debt from it, so **log even a
+   nothing-warranted pass** ("checked, nothing earned a doc" is knowledge too).
+   And the usage record, per the shared rules below:
+   `… usage-log <root> map --scope <every id read in step 2>`.
+
+**Proactive (on load).** When `status` shows `captures_since_map > 0` — or
+`last_map` null with sources present and `enrichment_counts` all zero —
+**offer** the pass, once: *"8 sources have arrived since the enrichment layer
+was last mapped — want me to propose the entities, concepts, and open questions
+they hold?"* Offer only; **never map unasked** — it is a real token spend, and
+proposing-not-writing extends to proposing-not-scanning, exactly as with
+synthesize.
+
+## Deliverables (original work product drafted from the base — ADR-0044, T-170)
+
+Sometimes the thing you draft belongs *outside* the base — a memo, a grant
+proposal, a set of interview questions, a briefing. Draft it **at the base
+anyway**: grounding and citations bind even when the output departs, and drafting
+away from the base loses the provenance that makes it trustworthy.
+
+1. **Land it typed by what it *is*, not its filename.** A claim-bearing
+   composition (it asserts things about the world) is an **`insight`** — the
+   synthesis rung, per-span cited, composition self-check applied. An instrument
+   that asserts *nothing* — questions to ask, a checklist, an agenda — is a
+   **`question` doc**: non-assertive, regenerable, and it **ripens as sources
+   arrive** (`regenerate` re-derives it when the answering source lands). Type by
+   what the artifact *does* — the dogfood's own judgment, not the filename.
+2. **Export the departing copy.** The derived doc is the **warranted master**; the
+   exported `.docx`/email/slide is a **disposable projection** of it. A pure
+   one-shot with no reuse value may skip the landing.
+3. **Authorship never mints a source — ratification does.** A deliverable becomes
+   a **source** only through an event *in the world* — approval, execution,
+   sending, publication — and what you capture is the **artifact-of-record of that
+   event** (the signed PDF, the sent email, the recorded call's transcript — the
+   ratified version from the system that holds it), **never the working draft**. On
+   ratification the draft's derived doc takes its honest ending: **`supersede --by`
+   the ratified source** (ADR-0041), derivation history kept. Deriving *from* the
+   ratified source is then legitimate and **not** chaining (it is a source); the
+   warranty stays honest — *"faithfully what the approved brief says,"* never *"its
+   claims are true"* (challenge/drift govern truth, as ever).
+
+**Never** capture a working draft as a source — that launders a derived doc into
+ground truth, and every later derivation would chain on it invisibly (the
+intra-base twin of the T-165 forbidden shortcut). *Worked case: interview
+questions drafted from the base land as a `question` doc and never become a
+source; the **call** where they were asked does — captured as its transcript.*
+
 ## Explore (outward discovery — Huginn reaches, never remembers)
 
 `explore` is the **mirror of `synthesize`**: synthesize looks *inward* for new
@@ -1192,13 +1380,13 @@ Three questions: `review` = fidelity · `challenge` = truth ·
 **Never:** auto-runs (the user mentioning doubt is not an invocation — ask);
 writes uninvited; reaches outside without the user's word; rates truth.
 
-## Usage-logging rules (the shared close step of ask · review · synthesize)
+## Usage-logging rules (the shared close step of ask · review · synthesize · map)
 
 Each AI verb's flow ends with a numbered **log-the-run step** pointing here —
 placement inside the flow, not a section to remember (T-152; the standalone-
 section geometry demonstrably dropped). The ledger auto-records the
 deterministic Core ops, but the real token spenders — **`ask`, `review`,
-`synthesize`** — are your orchestration, so the Core can't see them; the
+`synthesize`, `map`** — are your orchestration, so the Core can't see them; the
 record you append with `odin_usage_log` (CLI `usage-log`) is the only
 measurement there is, and `usage` now says so out loud when it's missing:
 
