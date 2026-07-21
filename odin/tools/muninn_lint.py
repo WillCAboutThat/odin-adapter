@@ -18,9 +18,12 @@ Tool-neutral by design: this reads only the on-disk format, no LLM required.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +32,68 @@ try:
 except ImportError:  # pragma: no cover
     print("error: PyYAML is required — `python3 -m pip install pyyaml`, or run via `uv run --script` which provisions it (T-150)", file=sys.stderr)
     sys.exit(2)
+
+# --------------------------------------------------------------------------- #
+# T-187: optional read-prefetch — a detachable accelerator (ADR-0027 posture).
+# On a filesystem where each file `open` pays a latency tax (Windows real-time
+# AV/EDR scanning, network drives), lint's hundreds of serial opens dominate its
+# wall-time. `prefetched()` reads every base file ONCE, concurrently, into an
+# in-memory cache; the read helpers below serve from it, so a full lint does
+# zero opens and pays the per-open cost once, overlapped. Best-effort: any
+# failure leaves the cache None and every read falls back to a normal read —
+# byte-identical results, just slower. No guarantee rests on it (drop it and
+# lint is unchanged), and it is scoped to full-lint entrypoints only, so the
+# cheap status/freshness path is untouched.
+# --------------------------------------------------------------------------- #
+_PREFETCH: dict | None = None  # {str(path): raw bytes} while a lint is prefetched
+
+
+def _rb(path: Path) -> bytes:
+    """read_bytes(), served from the prefetch cache when active (T-187)."""
+    if _PREFETCH is not None:
+        v = _PREFETCH.get(str(path))
+        if v is not None:
+            return v
+    return path.read_bytes()
+
+
+def _rt(path: Path, errors: str | None = None) -> str:
+    """read_text(utf-8), served from the prefetch cache when active (T-187).
+    Replicates read_text's universal-newline translation, so a cached CRLF file
+    decodes identically to a real read."""
+    if _PREFETCH is not None:
+        v = _PREFETCH.get(str(path))
+        if v is not None:
+            t = v.decode("utf-8", errors or "strict")
+            return t.replace("\r\n", "\n").replace("\r", "\n")
+    return path.read_text(encoding="utf-8", errors=errors)
+
+
+def _prefetch(root: Path):
+    """Concurrently read every file under the base into a {str(path): bytes}
+    cache. Best-effort — returns None on any failure (read helpers fall back)."""
+    try:
+        files = [p for p in Path(root).rglob("*")
+                 if p.is_file() and ".odin" not in p.parts]
+        if len(files) < 2:
+            return None
+        with ThreadPoolExecutor(max_workers=min(len(files), (os.cpu_count() or 2))) as ex:
+            return dict(ex.map(lambda p: (str(p), p.read_bytes()), files))
+    except Exception:
+        return None
+
+
+@contextlib.contextmanager
+def prefetched(root: Path):
+    """Activate the T-187 prefetch cache for the span of a full lint."""
+    global _PREFETCH
+    prev = _PREFETCH
+    _PREFETCH = _prefetch(root)
+    try:
+        yield
+    finally:
+        _PREFETCH = prev
+
 
 DERIVED_TYPES = {"summary", "entity", "concept", "question", "insight"}
 DERIVED_DIRS = {"summaries", "entities", "concepts", "questions", "insights"}
@@ -139,7 +204,7 @@ def derived_content_hash(title, abstract, body) -> str:
 
 def source_content_hash(source_md: Path) -> str:
     """Text-source hash: frontmatter stripped, body hashed (SPEC §4.2)."""
-    _, body = split_frontmatter(source_md.read_text(encoding="utf-8"))
+    _, body = split_frontmatter(_rt(source_md))
     return content_hash_of_body(body)
 
 
@@ -176,7 +241,7 @@ def canonical_content_hash(canonical: Path) -> str:
     Delegates to `content_hash_of_canonical` so a file on disk hashes the same as
     the bytes `capture` held: text by normalized body, binary by raw bytes.
     """
-    return content_hash_of_canonical(canonical.name, canonical.read_bytes())
+    return content_hash_of_canonical(canonical.name, _rb(canonical))
 
 
 def partition_source_files(source_dir: Path):
@@ -222,10 +287,10 @@ def source_text(source_dir: Path, meta: dict) -> str:
     """
     aid = source_dir / "source-text.md"
     if aid.exists():
-        return aid.read_text(encoding="utf-8", errors="replace")
+        return _rt(aid, errors="replace")
     canonical = current_canonical(source_dir, meta)
     if canonical is not None and canonical.suffix.lower() in TEXT_SUFFIXES:
-        return canonical.read_text(encoding="utf-8", errors="replace")
+        return _rt(canonical, errors="replace")
     return ""
 
 
@@ -294,7 +359,7 @@ class Linter:
         if not mpath.exists():
             self.error("L12", "no muninn.yml manifest at Muninn root", mpath)
             return
-        data = yaml.safe_load(mpath.read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load(_rt(mpath)) or {}
         if "muninn" not in data:
             self.error("L12", "muninn.yml missing required 'muninn:' format version", mpath)
         integrity = data.get("integrity") or {}
@@ -313,7 +378,7 @@ class Linter:
             if not meta_path.exists():
                 self.error("L9", f"source '{child.name}' has no meta.yml", child)
                 continue
-            data = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+            data = yaml.safe_load(_rt(meta_path)) or {}
             doc = Doc(id=data.get("id", f"?{child.name}"), type="source",
                       kind="source", path=child, data=data)
             self.docs.append(doc)
@@ -324,7 +389,7 @@ class Linter:
             if not d.is_dir():
                 continue
             for md in sorted(d.glob("*.md")):
-                fm, _ = split_frontmatter(md.read_text(encoding="utf-8"))
+                fm, _ = split_frontmatter(_rt(md))
                 if fm is None:
                     self.error("L9", f"{self._rel(md)} has no YAML frontmatter", md)
                     continue
@@ -365,7 +430,7 @@ class Linter:
             fields["abstract"] = d.data.get("abstract")
         if d.kind in ("derived", "decision"):
             try:
-                _, body = split_frontmatter(d.path.read_text(encoding="utf-8"))
+                _, body = split_frontmatter(_rt(d.path))
                 fields["body"] = body
             except Exception:
                 pass
@@ -511,7 +576,7 @@ class Linter:
         # also rewrite the hash. A doc with no `self_hash` (captured before the flag was
         # enabled) is skipped, so turning the flag on never forces a mass regenerate.
         if self._self_hash_enabled and (stamped := d.data.get("self_hash")):
-            _, body = split_frontmatter(d.path.read_text(encoding="utf-8"))
+            _, body = split_frontmatter(_rt(d.path))
             actual = derived_content_hash(d.data.get("title"), d.data.get("abstract"), body or "")
             if stamped != actual:
                 self.error("L19", "derived doc edited out-of-band — self_hash does not "
@@ -530,7 +595,7 @@ class Linter:
                 if (ref := self.by_id.get(s.get("id") if isinstance(s, dict) else s))
                 is not None and ref.kind == "source")
             if src_len >= SUMMARY_COMPRESS_FLOOR:
-                _, body = split_frontmatter(d.path.read_text(encoding="utf-8"))
+                _, body = split_frontmatter(_rt(d.path))
                 summary_len = len(d.data.get("abstract") or "") + len(body or "")
                 if summary_len > src_len:
                     self.warn("L18", f"summary ({summary_len} chars) is longer than its "
@@ -637,7 +702,7 @@ class Linter:
             if d.kind == "source":
                 h = d.data.get("content_hash", "")
             else:
-                h = "sha256:" + hashlib.sha256(d.path.read_bytes()).hexdigest()
+                h = "sha256:" + hashlib.sha256(_rb(d.path)).hexdigest()
             entries.append(f"{d.id}\t{h}")
         entries.sort()
         return "sha256:" + hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
@@ -647,7 +712,7 @@ class Linter:
         if not index.exists():
             self.error("L8", "no index.md at Muninn root", index)
             return
-        text = index.read_text(encoding="utf-8")
+        text = _rt(index)
         # Structural, not substring (T-026): a doc "appears in the index" when it
         # is an actual entry — a Markdown link whose label is the id (exactly what
         # the §5.3 projection emits). The old substring check false-passed an id
@@ -662,8 +727,10 @@ class Linter:
 
     # -- run ---------------------------------------------------------------- #
     def run(self) -> int:
-        self.load()
-        self.check()
+        with prefetched(self.root):
+            self.load()
+            self.check()
+            fingerprint = self.content_fingerprint()
         errors = [f for f in self.findings if f.severity == "error"]
         warns = [f for f in self.findings if f.severity == "warn"]
         for f in sorted(self.findings, key=lambda x: (x.severity != "error", x.rule)):
@@ -672,7 +739,7 @@ class Linter:
         n_docs = len([d for d in self.docs if d.kind != "manifest"])
         print(f"\nMuninn: {self.root}")
         print(f"  {n_docs} documents · {len(errors)} error(s) · {len(warns)} warning(s)")
-        print(f"  fingerprint: {self.content_fingerprint()}")
+        print(f"  fingerprint: {fingerprint}")
         if not errors:
             print("  OK — invariants hold." + (" (with warnings)" if warns else ""))
         return 1 if errors else 0

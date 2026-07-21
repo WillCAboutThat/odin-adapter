@@ -1025,7 +1025,15 @@ on a derived-only change (a `regenerate` adds nothing new to connect).
    gets skipped), and the Core enforces it downstream: at crystallize, **a
    quoted span that isn't in its cited source refuses the write**. Write
    **nothing** durable unasked.
-5. **Crystallize on the nod.** For each connection the user keeps, write an
+5. **Crystallize on the nod.** For each connection the user keeps: if it
+   **extends a doc the base already holds** — a source now supports an existing
+   insight (or entity/concept) it doesn't yet cite — **fold, don't duplicate**:
+   stage it `--into <that-id>` so `promote-candidate --into` unions the new
+   source into provenance and literal-inserts the quote-verified block (ADR-0035;
+   `regenerate` re-coalesces later if it accretes). This is the sanctioned heal
+   for a widened-provenance connection — lint won't flag it (it checks the
+   fidelity of *cited* sources, not the relevance of *uncited* ones; recall is
+   this deliberate pass's job). Otherwise write a new
    **`insight`** doc via the Core, grounded in its N peer sources and stamped
    **`--derivation synthesis`** (the third integrity rung — an insight is the
    least deterministic derivation; `ask` will roll it up as the weakest link):
@@ -1036,7 +1044,12 @@ on a derived-only change (a `regenerate` adds nothing new to connect).
    containment-verifies every ≥15-char double-quoted span on a line citing a
    provenance source against that source's actual text and **refuses the
    write on a mismatch** (T-153; a fabricated or paraphrased "quote" cannot
-   enter the base) — under these **authoring rules** (ADR-0015 — learned
+   enter the base). Quote the **literal source bytes**: markdown syntax
+   (`**`, `` ` ``), punctuation, and letter case are part of the source and
+   must be reproduced — only whitespace/line-wrapping and smart/straight
+   quotes are normalized for you, so a refusal means the *quote* is wrong,
+   not the gate.
+   Author under these **authoring rules** (ADR-0015 — learned
    from a real overreach that passed author, reviewer, and lint):
    - **The abstract may not assert a link the sources don't state.** It is the
      index-projected, most-skimmed span — "a breach *tied to* the return clause"
@@ -1117,6 +1130,16 @@ deliberate now.
    grounded in its own sources with per-span linked citations (ADR-0038). The
    Core **containment-verifies every quoted span** in these types (the T-153
    gate) and refuses fabrication — the manifest skim can trust the evidence.
+   Quote the literal bytes (markdown, punctuation, and letter case count; only
+   whitespace and smart quotes are normalized) — a refusal names the quote to
+   fix, not a check to work around.
+   - **Extends a doc the base already holds → fold, don't duplicate.** When a
+     proposed entity/concept restates one the base already carries but with a
+     new source, stage it `--into <that-id>` and `promote-candidate --into`
+     unions the source into provenance and literal-inserts the quote-verified
+     block (ADR-0035) — rather than minting a near-duplicate; `regenerate`
+     re-coalesces if it accretes. Lint stays silent on this by design (it
+     checks *cited*-source fidelity, not *uncited*-source relevance).
    - **The join is an arch — run the composition self-check on it (ADR-0015).**
      The T-153 gate verifies each quoted span (the *bricks*); it cannot see the
      claim made by *arrangement* — that these spans name one identity, that a

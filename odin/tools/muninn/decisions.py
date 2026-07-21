@@ -348,14 +348,15 @@ def lint_report(root) -> dict:
     ADR-0005 baseline entry (T-124); the Linter ENGINE stays side-effect-free —
     recording lives here, at the op layer."""
     linter = muninn_lint.Linter(Path(root))
-    linter.load()
-    linter.check()
+    with muninn_lint.prefetched(root):  # T-187: concurrent read-prefetch accelerator
+        linter.load()
+        linter.check()
+        fingerprint = linter.content_fingerprint()
     errors = [{"rule": f.rule, "message": f.message, "path": f.path}
               for f in linter.findings if f.severity == "error"]
     warnings = [{"rule": f.rule, "message": f.message, "path": f.path}
                 for f in linter.findings if f.severity == "warn"]
     n_docs = len([d for d in linter.docs if d.kind != "manifest"])
-    fingerprint = linter.content_fingerprint()
     record_lint_entry(root, ok=not errors, n_errors=len(errors),
                       n_warnings=len(warnings), fingerprint=fingerprint)
     return {"ok": not errors, "errors": errors, "warnings": warnings,

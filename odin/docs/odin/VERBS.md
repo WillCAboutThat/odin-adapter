@@ -126,7 +126,7 @@ Append the drift-check outcome (same/changed/unreachable counts + optional detai
 
 ### `derive` · MCP `odin_derive`
 
-Write a derived doc (summary/entity/concept/question/insight) grounded ONLY in sources. Core copies each source's current hash into provenance; a provenance id that is not a real source is rejected (I3, no chaining). `body` is the adapter-authored content. For an INSIGHT, quoted spans are containment-verified (T-153): a double-quoted span ≥15 chars on a line citing a provenance source must appear in that source's text or the write is refused — quote sources exactly, never from a summary's paraphrase. A `question` doc may be answered or explicitly OPEN (abstract leads 'OPEN — ', T-154); regenerate re-derives it when answered.
+Write a derived doc (summary/entity/concept/question/insight) grounded ONLY in sources. Core copies each source's current hash into provenance; a provenance id that is not a real source is rejected (I3, no chaining). `body` is the adapter-authored content. For an INSIGHT, quoted spans are containment-verified (T-153): a double-quoted span ≥15 chars on a line citing a provenance source must appear in that source's text or the write is refused — quote sources exactly, never from a summary's paraphrase (whitespace and smart quotes are normalized for you; markdown syntax, punctuation, and letter case are literal source bytes you must reproduce). A `question` doc may be answered or explicitly OPEN (abstract leads 'OPEN — ', T-154); regenerate re-derives it when answered.
 
 | Switch | | What it does |
 |---|---|---|

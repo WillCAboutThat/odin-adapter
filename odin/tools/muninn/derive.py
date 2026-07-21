@@ -237,7 +237,10 @@ def write_derived(root, id, *, body, sources, type="summary", title,
             raise ValueError(
                 f"quoted span(s) not found in the cited source(s) (T-153): {detail} — "
                 f"a verbatim quote must appear in the source's text; re-read the "
-                f"source and quote it exactly, or cite the source that states it")
+                f"source and quote it exactly, or cite the source that states it "
+                f"(whitespace and smart/straight quotes are normalized for you, but "
+                f"markdown syntax like ** or `, punctuation, and letter case are "
+                f"literal source bytes you must reproduce)")
 
     fm = {"id": id, "type": type, "title": title}
     if abstract:

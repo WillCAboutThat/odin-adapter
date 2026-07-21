@@ -458,7 +458,10 @@ OPS = {
                        "double-quoted span ≥15 chars on a line citing a "
                        "provenance source must appear in that source's text or "
                        "the write is refused — quote sources exactly, never "
-                       "from a summary's paraphrase. A `question` doc may be "
+                       "from a summary's paraphrase (whitespace and smart quotes "
+                       "are normalized for you; markdown syntax, punctuation, and "
+                       "letter case are literal source bytes you must reproduce). A "
+                       "`question` doc may be "
                        "answered or explicitly OPEN (abstract leads 'OPEN — ', "
                        "T-154); regenerate re-derives it when answered.",
         "params": {
