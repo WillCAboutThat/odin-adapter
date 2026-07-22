@@ -224,35 +224,54 @@ flowchart LR
 
 ### The verbs, in plain language
 
-There are no commands to learn; you talk, and these are the verbs underneath:
+There are no commands to memorize. You describe what you want in your own
+words; Odin picks the verb and runs it, and asks when a request is genuinely
+ambiguous. So read the tables below as *what Odin can do* — **not a list you
+have to keep in your head.** Two things make the surface smaller than its length
+suggests:
 
-| Say | Verb | What happens |
+- **You never name a verb.** *"Remember this." "What do we know about the
+  vendor?" "Is that actually true?"* Odin routes to the right one.
+- **Odin keeps house on its own.** Several of these are cleanup steps Odin
+  *offers* at the right moment and runs on your nod — you rarely say them out
+  loud. If you ever catch yourself wondering *"do I need `regenerate`?"* — you
+  don't. Say *"this looks out of date"* and Odin brings the right fix.
+
+**Things you ask for** — just talk; Odin does the rest:
+
+| You say… | Verb | What happens |
 |---|---|---|
 | *"remember this"* | `ingest` | An immutable copy with origin + content hash is captured, a cited summary derived, both indexed. Pastes, files, connector items (fetched in full), and a self-clearing `inbox/` batch. |
 | *"what do we know about X?"* | `ask` | An answer with citations and stated assurance. "The base doesn't know" beats a guess. |
-| *"go look at that repo/drive/system and report"* | `explore` | Transient outward discovery; nothing enters memory without a consented ingest. |
-| *"find the lease"* | `find` | Deterministic text search; works with no AI at all, forever. |
-| *"search for anything about onboarding"* | `search` | Semantic lookup over a disposable index; proposes candidates, never grounds. |
-| *(the default lookup)* | `retrieve` | `search` and `find` together, with a mechanical fallback. |
+| *"find the lease" · "search for anything on onboarding" · "pull up X"* | `find` · `search` · `retrieve` | Look something up — **you needn't pick which.** `find` is deterministic text (works with no AI, forever); `search` adds semantic meaning; `retrieve`, the default, combines them. Ask for what you want; Odin uses the right one. |
 | *"why did we choose X?"* | `why` | The recorded decision and its rationale, cited. |
 | *"record a decision: we're going with Y"* | `record a decision` | Your call, authored onto the record (yours, not derived). |
 | *"what connects across our sources?"* | `synthesize` | Proposed cross-source insights, grounded and cited, written only on your nod. |
-| *"chart the people, ideas, and open questions in here"* | `map` | One itemized proposal of entities, concepts, and open questions across the sources: strike what you don't want, approve once. Never runs as an ingest side-effect. |
+| *"chart the entities, concepts, and open questions across these"* | `map` | Builds the enrichment layer **on purpose** — an itemized proposal of the entities, concepts, and open questions across your sources; strike any, approve once. It's a verb rather than an ingest side-effect by design: folded into ingest it was reliably skipped (ADR-0043), so `map` is how you *ask* for that layer. (Odin also nudges it when enrichment falls behind.) |
+| *"go look at that repo/drive/system and report"* | `explore` | Transient outward discovery; nothing enters memory without a consented ingest. |
+| *"is that actually true? play devil's advocate"* | `challenge` | Adversarial second opinion on **one named claim** — the sources re-read skeptically, the world searched for counter-evidence on your word; findings offered, never auto-written. (No single claim in mind? Say *"re-check everything"* and Odin runs a `review` instead.) |
 | *"re-check our conclusions against the sources"* | `review` | An adversarial re-check of derived docs against the source bytes; read-only, advisory. |
-| *"review the pending pile"* | `review-candidates` | Batch-admit or decline the inferences Odin staged while reasoning; declines are remembered, never re-nagged. |
-| *"is that actually true? play devil's advocate"* | `challenge` | Adversarial second opinion on one claim — the sources re-read skeptically, the world searched for counter-evidence on your word; findings offered, never auto-written. |
 | *"is our memory current with the world?"* | `drift-check` | Re-fetch connector sources on your word, compare deterministically, flag what changed; staleness cascades to everything that rested on it. Sweeps **every checkable source by default**; `--project` narrows, `--older-than 30d` checks only what's due. |
-| *"is our memory healthy?"* | `lint` | The structural check that defines done: provenance present, no summary chaining, staleness flagged, every source summarized. |
+| *"is our memory healthy?"* | `lint` | The structural check that defines done: provenance present, no summary chaining, staleness flagged, every source summarized. Runs automatically after every change; you can also just ask. |
+
+**Things Odin offers** — it surfaces these at the right moment; you approve,
+you needn't remember them:
+
+| When… | Verb | What it does |
+|---|---|---|
+| a source changed, or a summary is stale or missing | `regenerate` | Re-derives the page from its current source — the *heal* half of "flag it, then fix it on consent." You never have to name it; Odin offers it when `lint` or `review` finds the gap. |
+| inferences piled up while Odin was reasoning | `review-candidates` | Batch-admit or decline the inferences Odin staged; declines are remembered, never re-nagged. |
+| a conclusion you've overturned needs an honest ending | `supersede` | Kept for the record, out of retrieval, never deleted. |
+
+And a few pure setup/maintenance ops you'll almost never touch — Odin reaches
+for them when the moment calls, always visibly: `init` (start a base), `status`
+(the health glance it reads on load), `reindex` (rebuild the disposable search
+index), `retier` (correct a capture tier).
 
 Every verb's switches and defaults live in a reference **generated from the same
 table that builds the CLI and the MCP tools** (so it can't drift):
-`odin/docs/odin/VERBS.md` in the plugin bundle.
-
-Maintenance verbs exist too (`init`, `status`, `regenerate`, `reindex`,
-`retier`, `supersede` — that last one is how a conclusion you've overturned
-gets an honest ending: kept for the record, out of retrieval, never deleted);
-Odin reaches for them when the moment calls, always visibly, and
-the full contract ships in the bundle (`odin/docs/odin/SKILLS.md`).
+`odin/docs/odin/VERBS.md` in the plugin bundle; the full contract ships alongside
+it (`odin/docs/odin/SKILLS.md`).
 
 And everything above lands as plain Markdown + links in a folder you own:
 readable in any editor, browsable in Obsidian, verifiable years from now with

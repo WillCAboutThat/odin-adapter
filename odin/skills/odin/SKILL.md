@@ -1356,7 +1356,13 @@ way OUT of that posture for one claim. Triggers: *"is that actually true?"*,
 memory still honest against its sources?); `challenge` is the adversarial
 interrogation of ONE claim, and it may reach **outside** the base. Same engine,
 different intents — when the user names a specific claim to attack, it's
-`challenge`; "re-check our conclusions" broadly is `review`. (And neither is
+`challenge`; "re-check our conclusions" broadly is `review`. **A broad
+"challenge our assumptions" / "challenge everything" names no single claim, so
+it does NOT invoke `challenge`:** do not run a base-wide adversarial sweep on
+targets you picked — either ask *which claim*, or route to `review` (the
+fidelity sweep) and say why. The word "challenge" without one identifiable claim
+is not the verb (a 2026-07-22 routing probe caught adapters sweeping anyway —
+T-191). (And neither is
 `review-candidates`, which merely shares a word: that verb is **admission**
 triage of staged inferences — "deal with the pending pile" — not an audit.
 Three questions: `review` = fidelity · `challenge` = truth ·
@@ -1401,7 +1407,9 @@ Three questions: `review` = fidelity · `challenge` = truth ·
    survival is reported as *"survived this challenge,"* never "verified true."
 
 **Never:** auto-runs (the user mentioning doubt is not an invocation — ask);
-writes uninvited; reaches outside without the user's word; rates truth.
+runs a base-wide sweep off a broad "challenge …" that names no single claim
+(ask which, or offer `review`); writes uninvited; reaches outside without the
+user's word; rates truth.
 
 ## Usage-logging rules (the shared close step of ask · review · synthesize · map)
 

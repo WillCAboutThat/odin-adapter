@@ -86,7 +86,10 @@ guessing. These disambiguations matter most:
   (maintenance, inward); `challenge` adversarially interrogates **one claim** and
   may reach **outside** the base for disconfirming evidence (ADR-0040). "Re-check
   our conclusions" is `review`; "is that specific claim actually true?" is
-  `challenge`.
+  `challenge`. A **broad "challenge our assumptions" names no single claim, so it
+  is NOT `challenge`**: don't sweep the base adversarially on self-picked targets
+  — ask which claim, or route to `review` and say why (T-191 caught adapters
+  sweeping anyway).
 - **"update"** is overloaded. "Update the summary of X" / "X is out of date" —
   meaning re-derive an existing page from current sources — is `regenerate`.
   "Update our knowledge on X" with *new* material is `ingest`. When unclear
@@ -361,6 +364,20 @@ cited). The `Covers`/`Answers` facets are where reader-vocabulary matters most:
   facet, not a longer paraphrase. (The linter warns via **L18**; the sole exemption
   is an opaque source with no text layer — a `model-read` of an image — which has no
   length to be shorter than.)
+  - *Don't "pass through" a short source as its own summary.* It is tempting, for a
+    tiny source, to copy its text into the summary body and note "this is the entire
+    text" — resist it. A summary body is **adapter prose the Core does not verify
+    against the source** (unlike a T-153 quoted span), so a "verbatim" claim is
+    *unbacked*: nothing guarantees the copy is faithful, and stamping a lossy artifact
+    as authoritative **inverts** the summary's honest-because-lossy contract (I2 — the
+    source wins on any disagreement). Nor is it needed: the authoritative bytes already
+    exist, hashed and one linked click away, in the source itself (ADR-0038), and
+    duplicating them into an unverified doc buys no findability (the reader-vocabulary
+    facet is precisely the part the source *lacks*). Keep the summary honestly lossy —
+    minimal abstract + facet — and let the source hold the text. A *guaranteed*-verbatim
+    body would have to be a Core copy or a Core-verified gate (the T-153 pattern at
+    whole-doc scale), never an adapter promise — and the payoff does not clear that
+    Core + format cost.
 - **It's an iterative, measurable loop.** A curated question set is the
   findability check (T-039): re-run `find` after authoring; a query that still
   returns nothing means the digest is **under-worded**, not that retrieval is
