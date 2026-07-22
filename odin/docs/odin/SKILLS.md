@@ -230,7 +230,11 @@ Optionally a target project (`--project marketing-q3` / "…for the Q3 project")
   connector must be available/authorized to the adapter. **Fidelity rule
   (T-131): what gets captured is the source system's DATA** — the raw
   payload/export the connector returns — **never the adapter's own rendering of
-  it**. A rendering may stand in as the body only when no raw representation is
+  it**, and **never a truncated or placeholdered field** — a half-copied long
+  field (a `[…]`, a "see original") is a silent lossy capture the linter cannot
+  see, so the mechanical rule is to persist the raw payload as a file rather than
+  retype fields by hand (you cannot truncate what you do not retype; T-192). A
+  rendering may stand in as the body only when no raw representation is
   available, and then it is disclosed, not silent: `capture: reference` (+
   `capture_reason`), `recoverable` with the real locator, `origin.captured_by`
   naming the producing faculty/tool (ADR-0001), and `derivation: model-read` on
@@ -497,7 +501,11 @@ as an unordered set of **peers** with **per-span** citations (SPEC §5.2) — an
 leg** (T-153): a connection that cannot be quoted has not been grounded, and
 the quote is not decoration — at crystallize the Core **containment-verifies
 each quoted span against its cited source's text and refuses the write on a
-mismatch**, so a summary-paraphrase "quote" cannot enter the base. An
+mismatch**, so a summary-paraphrase "quote" cannot enter the base. **Quoted spans
+use logical quotation:** end the span at a word and keep your own sentence
+punctuation *outside* the closing quote — a period or comma pulled inside to smooth
+the sentence is the commonest way a span stops matching its source and trips the
+gate (T-153). An
 unsupported proposal is **dropped, not narrated**. A proposal that is **incomplete
 rather than wrong** — a real connection with one leg simply missing from memory — is
 *not* silently dropped: Odin **surfaces the gap and offers to dispatch Huginn** to
@@ -561,7 +569,12 @@ proposal, a set of interview questions, a briefing — the discipline is:
   per-span cited. An instrument that asserts *nothing* — questions to ask, a
   checklist, an agenda — is a **`question` doc**: non-assertive, regenerable, and
   it **ripens as sources arrive** (`regenerate` re-derives it when the answering
-  source lands). Type by what the artifact *does*.
+  source lands). Type by what the artifact *does* — **even when the user names a
+  type**: a requested type is a hint, not an override of the artifact's nature. If
+  honoring it would force you to quarantine or strip the substance (a claim-bearing
+  argument reduced to a sterile `question` doc, or an assertion-free checklist
+  inflated into an `insight`), that stripping is the mismatch signal: surface it and
+  offer the fitting type, never silently comply by gutting the content (T-193).
 - **Export the departing copy.** The derived doc is the **warranted master**; the
   exported `.docx`/email/slide is a **disposable projection** of it. A pure
   one-shot with no reuse value may skip the landing.

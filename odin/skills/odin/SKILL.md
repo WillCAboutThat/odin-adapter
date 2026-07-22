@@ -250,6 +250,16 @@ base state duplicates what the `connectors` projection computes live).
      (a work item, a ticket, a thread, a cloud doc): the **raw tool response is the
      capturable artifact**; persist it verbatim (`--source-file item.json`, or the
      body as the unmodified payload text), never your own prose retelling of it.
+     **Never truncate, abbreviate, or placeholder a field value** — a `[…]`, a
+     "see original", or a half-copied long field is a *silent lossy capture* the
+     linter cannot see (a truncated body hashes and lints as cleanly as the full
+     one). The mechanical guard is the raw-first rule itself: **hand the Core the
+     payload file and `--source-file` it — do not retype field values into the
+     body by hand.** You cannot truncate what you do not retype; truncation creeps
+     in only on the hand-authored path, under context pressure, on the longest
+     fields (observed three times on real ADR work items — T-192). If the full
+     bytes genuinely cannot be held, that is the voiced **reference**-tier fallback
+     below — never a quiet truncation dressed as `capture: full`.
      A rendering may stand in as the source body **only when no raw representation
      is available**, and then it is **voiced and carries all four honesty stamps,
      never silent**: say in chat that a rendering (not the source data) is being
@@ -310,7 +320,12 @@ base state duplicates what the `connectors` projection computes live).
    not just ingest): plain portable Markdown, and **no em-dashes**; use commas,
    colons, or parentheses instead. The base is read in ordinary editors (VS Code,
    Obsidian) whose Markdown views render them poorly, and it must read cleanly
-   everywhere. How you *read* the source,
+   everywhere. **Quoted spans use logical quotation** (T-153): end the span at a
+   word and keep your own sentence punctuation *outside* the closing quote — the
+   quote marks delimit the exact verbatim source substring, so a period or comma
+   pulled inside to smooth your sentence is the commonest way a span silently stops
+   matching its source (worst case, ending at a word quotes a slightly tighter span
+   than you could; it never fails the gate). How you *read* the source,
    and how you stamp the summary's
    `derivation`, depends on what the Core could extract (ADR-0011):
    - **Text-native or extractable** (`.md`, `.txt`, a PDF/.docx the registry read):
@@ -1181,6 +1196,16 @@ away from the base loses the provenance that makes it trustworthy.
    **`question` doc**: non-assertive, regenerable, and it **ripens as sources
    arrive** (`regenerate` re-derives it when the answering source lands). Type by
    what the artifact *does* — the dogfood's own judgment, not the filename.
+   **This binds even when the user NAMES a type** — a requested type is a hint,
+   never an override of the artifact's nature. If honoring it would force you to
+   **quarantine or strip the substance** (a claim-bearing argument reduced to a
+   sterile `question` doc, or an assertion-free checklist inflated into an
+   `insight`), that stripping *is* the mismatch signal: **surface it and offer the
+   fitting type** — *"this reasoning asserts positions, so a question doc would drop
+   them; an `insight` keeps them cited and synthesis-stamped — want that instead?"*
+   Never silently comply by gutting the content and reporting success; heavy
+   quarantine to fit a requested type means the type is wrong, not that the content
+   was unfit to keep (T-193).
 2. **Export the departing copy.** The derived doc is the **warranted master**; the
    exported `.docx`/email/slide is a **disposable projection** of it. A pure
    one-shot with no reuse value may skip the landing.
