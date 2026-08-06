@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "odin-core": {
+      "command": "uv",
+      "args": ["run", "--script", "${CLAUDE_PLUGIN_ROOT}/tools/odin_mcp.py"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}"
+    }
+  }
+}

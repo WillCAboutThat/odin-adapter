@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Muninn project view frontmatter (projects/<name>.md)",
+  "description": "The frontmatter contract of a curated view page (SPEC §5.6, ADR-0002, format 1.0). A project is a view, not a container: membership lives here, never on the member (sources stay immutable, I1), and listing an id is a link, not provenance. The page body is a deterministic projection (ADR-0017), never authored prose. Unknown fields are permitted (§5). Member resolution (L11) and scope semantics are enforced by the linter.",
+  "type": "object",
+  "required": ["id", "type", "title", "members"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "Stable id. The one canonical global hub seeded by init has id `global` (ADR-0018)." },
+    "type": { "const": "project" },
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "description": "A plain maintainer LABEL — never read as a sourced claim." },
+    "members": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ids this view gathers (links, not provenance). Required but MAY be empty — an empty view is valid (e.g. the freshly seeded global hub)."
+    },
+    "scope": {
+      "enum": ["project", "global"],
+      "description": "`global` marks a view whose members are cross-cutting; synthesize unions every global view into scope (§5.6). Absent defaults to project."
+    },
+    "maintained_by": { "type": "string", "description": "<faculty>/<tool>@<version>." },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  }
+}

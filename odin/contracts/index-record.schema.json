@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://odin.dev/contracts/index-record.schema.json",
+  "title": "index.jsonl record",
+  "description": "One line of index.jsonl, the machine-floor projection (ADR-0046, T-204). A projection artifact like llms.txt: computed from document frontmatter, deterministic, not format-binding, not load-bearing for conformance. Every value is a faithful copy of the pointed-to document's frontmatter; the linter (L22) verifies the whole file is a faithful render where it exists.",
+  "type": "object",
+  "required": ["id", "kind", "path"],
+  "properties": {
+    "id": { "type": "string" },
+    "kind": { "enum": ["source", "derived", "project", "decision"] },
+    "path": {
+      "type": "string",
+      "description": "Root-relative POSIX path — for a source, its current canonical file; otherwise the document file."
+    },
+    "type": {
+      "type": "string",
+      "description": "Derived-doc type (summary, entity, concept, question, insight); absent for other kinds."
+    },
+    "title": { "type": "string" },
+    "abstract": { "type": "string" },
+    "status": { "type": "string" },
+    "derivation": { "enum": ["extracted", "model-read", "synthesis"] },
+    "scope": { "type": "string" },
+    "as_of": {},
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "origin": {
+      "type": "object",
+      "description": "Source origin facts (system, ref, upstream_ref) — present on sources only.",
+      "properties": {
+        "system": { "type": "string" },
+        "ref": {},
+        "upstream_ref": {}
+      },
+      "additionalProperties": true
+    },
+    "tier": {
+      "enum": ["full", "reference"],
+      "description": "The source's capture tier; present on sources only."
+    },
+    "recoverable": { "type": "boolean" },
+    "content_hash": { "type": "string" },
+    "version": { "type": "integer" },
+    "provenance": {
+      "type": "array",
+      "description": "Derived docs: the grounding sources, id + recorded content hash.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "hash": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Decisions: evidence-linked source ids (links, not provenance).",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}
