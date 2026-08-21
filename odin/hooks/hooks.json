@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --script \"${CLAUDE_PLUGIN_ROOT}/hooks/warm_index.py\""
+          },
+          {
+            "type": "command",
+            "command": "uv run --script \"${CLAUDE_PLUGIN_ROOT}/hooks/freshness_check.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__.*odin[-_]core__odin_(init|capture|capture_repo|reextract|retier|anchor|drift_log|derive|stage_candidate|promote_candidate|decline_candidate|index|stamp|reproject|relink|challenge_log|map_log|review_log|supersede|project|record_decision)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --script \"${CLAUDE_PLUGIN_ROOT}/hooks/post_write_lint.py\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --script \"${CLAUDE_PLUGIN_ROOT}/hooks/stop_lint_check.py\"",
+            "timeout": 90
+          }
+        ]
+      }
+    ]
+  }
+}
