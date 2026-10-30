@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Muninn manifest (muninn.yml)",
+  "description": "The file that marks a directory as a Muninn and records which format version it conforms to (SPEC §5.7, ADR-0002). The one file Odin may rely on to distinguish a Muninn from an ordinary folder (L12). Format versions evolve additively only (ADR-0037): a base adopts new capability by opting in and bumping its own `muninn:` version; it is never migrated implicitly. Unknown fields are permitted (§5).",
+  "type": "object",
+  "required": ["muninn"],
+  "properties": {
+    "muninn": {
+      "type": ["string", "number"],
+      "description": "The Muninn format version this KB conforms to (e.g. 1.0). YAML may parse an unquoted version as a number; both scalar forms are conformant."
+    },
+    "name": { "type": "string", "description": "Human-friendly name." },
+    "created_at": { "type": "string", "format": "date-time" },
+    "integrity": {
+      "type": "object",
+      "description": "Opt-in integrity enforcement switches (ADR-0029).",
+      "properties": {
+        "derived_self_hash": { "type": "boolean", "description": "When true, the linter ENFORCES L19 (self_hash vs authored content). The Core stamps self_hash regardless." }
+      }
+    }
+  }
+}

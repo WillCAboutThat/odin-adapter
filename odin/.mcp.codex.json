@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "odin-core": {
+      "command": "uv",
+      "args": ["run", "--script", "./tools/odin_mcp.py"],
+      "cwd": ".",
+      "env": { "UV_NO_CACHE": "1" }
+    }
+  }
+}

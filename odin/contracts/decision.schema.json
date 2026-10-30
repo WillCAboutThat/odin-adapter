@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Muninn decision frontmatter (decisions/<id>.md)",
+  "description": "The frontmatter contract of a KB-owner decision (SPEC §5.5, ADR-0019, format 1.0). A decision is AUTHORED, not derived: it carries no `sources` provenance (so it can never chain and is never L4-stale); `evidence` entries are LINKS — a source id plus the source VERSION seen at record time (a hash-free change baseline). Revision is append-only amend-in-place; `date` stays fixed at the original decision. Unknown fields are permitted (§5). Evidence resolution and the advanced-version soft note are the linter's L17.",
+  "type": "object",
+  "required": ["id", "type", "title", "status", "date"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "Stable id. Recommended form: dec-<slug>." },
+    "type": { "const": "decision" },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["proposed", "accepted"] },
+    "date": { "type": "string", "format": "date", "description": "ISO 8601 — the date the decision was made; never moves on amendment." },
+    "evidence": {
+      "type": "array",
+      "description": "Informing sources — links, not provenance.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "A source id (a derived doc here is an L17 error)." },
+          "version": { "type": "integer", "minimum": 1, "description": "The source version seen at record time; a later advance is a soft note (L17 warn), never staleness." }
+        }
+      }
+    },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  }
+}

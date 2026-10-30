@@ -1,0 +1,559 @@
+"""Derived-doc writes with provenance — grounding-in-sources-only enforced at the boundary (I3, no chaining).
+
+Split from muninn_core.py (T-122); muninn_core remains the facade.
+"""
+import os
+import re
+import sys
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import muninn_lint  # noqa: E402
+from . import util  # noqa: E402  (module-attr access = the patch point)
+from .util import _append_log, _dump_yaml, _load_yaml, _locked, _valid_id, atomic_replace  # noqa: E402
+
+
+# --------------------------------------------------------------------------- #
+# write_derived — the deterministic half of derive (the Core/adapter handoff)
+# --------------------------------------------------------------------------- #
+_TYPE_DIR = {"summary": "summaries", "entity": "entities", "concept": "concepts",
+             "question": "questions", "insight": "insights"}
+# quoted-span containment (T-153) applies to insights and, since T-177, the map
+# products — every adapter-proposed type approved from a manifest. Summaries are
+# gated too, but only on RE-DERIVE (T-223): first authoring stays open so bulk
+# ingest cannot be blocked by an inexact quote, while a deliberate re-derive,
+# which a human asked for and is watching, is checked like everything else.
+_QUOTE_GATED_TYPES = {"insight", "entity", "concept", "question"}
+
+
+def stamp_derived(root):
+    """Backfill: stamp `self_hash` on every derived doc that lacks one, from its CURRENT
+    content — the lightweight self-heal for a base whose docs predate self-hashing (no
+    model, no content change, faithful). Idempotent. **Never re-stamps a doc that already
+    has a self_hash** — a mismatch there is a real out-of-band edit for L19 to flag, not
+    something to launder by overwriting. Returns {stamped, skipped}."""
+    root = Path(root)
+    stamped, skipped = 0, 0
+    for dirname in muninn_lint.DERIVED_DIRS:
+        d = root / dirname
+        if not d.is_dir():
+            continue
+        for md in sorted(d.glob("*.md")):
+            text = md.read_text(encoding="utf-8")
+            fm, body = muninn_lint.split_frontmatter(text)
+            if fm is None or "self_hash" in fm:
+                skipped += 1
+                continue
+            fm["self_hash"] = muninn_lint.derived_content_hash(
+                fm.get("title"), fm.get("abstract"), body or "")
+            tmp = md.parent / f".{md.name}.tmp"
+            tmp.write_text("---\n" + _dump_yaml(fm) + "---\n" + (body or ""), encoding="utf-8")
+            atomic_replace(tmp, md)
+            stamped += 1
+    return {"stamped": stamped, "skipped": skipped}
+
+
+def _link_target(root, doc_id):
+    """The readable file a citation of `doc_id` should link to, or None. A source
+    links to its text aid (else its canonical file); any other doc links to its
+    own `.md`. Mirrors the read path a human or AI actually follows."""
+    root = Path(root)
+    sdir = root / "sources" / doc_id
+    if sdir.is_dir():
+        aid = sdir / "source-text.md"
+        if aid.exists():
+            return aid
+        cands = [p for p in sorted(sdir.glob("source.*"))
+                 if p.is_file() and not p.name.startswith("source.v")]
+        return cands[0] if cands else None
+    for dirname in (*muninn_lint.DERIVED_DIRS, "decisions", "projects"):
+        p = root / dirname / f"{doc_id}.md"
+        if p.exists():
+            return p
+    return None
+
+
+@_locked
+def relink(root):
+    """Upgrade bare `[known-id]` citation spans to linked citations (ADR-0038) —
+    `[src-x]` → `[src-x](relative/path)` — across the authored derived layer
+    (derived docs + decisions; projects are computed and regenerate instead).
+
+    A regenerate-class maintenance repair (I5: deliberate and consented, never
+    automatic): idempotent — an already-linked span (`[id](…)`) is left alone, an
+    unknown id is not a citation and is untouched — and it re-stamps `self_hash`
+    on any derived doc it edits, so an L19-enforcing base stays clean (this is a
+    sanctioned Core edit, not an out-of-band one). Body bytes change → the content
+    fingerprint moves → the base reads `drifted` until the next lint; that is
+    correct surfacing. Returns {relinked, spans, unchanged}."""
+    root = Path(root)
+    ids = {}
+    for sdir in sorted((root / "sources").glob("*")) if (root / "sources").is_dir() else []:
+        if sdir.is_dir():
+            ids[sdir.name] = _link_target(root, sdir.name)
+    for dirname in (*muninn_lint.DERIVED_DIRS, "decisions", "projects"):
+        d = root / dirname
+        if d.is_dir():
+            for md in d.glob("*.md"):
+                ids[md.stem] = md
+    known = {i: t for i, t in ids.items() if t is not None}
+    if not known:
+        return {"relinked": 0, "spans": 0, "unchanged": 0}
+    span_re = re.compile(r"\[(" + "|".join(re.escape(i) for i in sorted(known, key=len,
+                                                                        reverse=True))
+                         + r")\](?!\()")
+    relinked = spans = unchanged = 0
+    for dirname in (*muninn_lint.DERIVED_DIRS, "decisions"):
+        d = root / dirname
+        if not d.is_dir():
+            continue
+        for md in sorted(d.glob("*.md")):
+            text = md.read_text(encoding="utf-8")
+            fm, body = muninn_lint.split_frontmatter(text)
+            if fm is None or not body:
+                unchanged += 1
+                continue
+
+            def _sub(m):
+                rel = os.path.relpath(known[m.group(1)], start=md.parent)
+                return f"[{m.group(1)}]({rel.replace(os.sep, '/')})"
+
+            new_body, n = span_re.subn(_sub, body)
+            if n == 0:
+                unchanged += 1
+                continue
+            if "self_hash" in fm:  # keep L19 truthful about this sanctioned edit
+                fm["self_hash"] = muninn_lint.derived_content_hash(
+                    fm.get("title"), fm.get("abstract"), new_body)
+            tmp = md.parent / f".{md.name}.tmp"
+            tmp.write_text("---\n" + _dump_yaml(fm) + "---\n" + new_body,
+                           encoding="utf-8")
+            atomic_replace(tmp, md)
+            relinked += 1
+            spans += n
+    return {"relinked": relinked, "spans": spans, "unchanged": unchanged}
+
+
+# --------------------------------------------------------------------------- #
+# T-153(d): quoted-span containment — evidence in the artifact, verified at the
+# write seam. The Core cannot watch the synthesize PROCESS (the propose step is
+# write-free conversation), so it demands what only the correct process
+# produces: a verbatim quote attributed to a source must actually appear in
+# that source's text. String containment = a faithful transform (the ADR-0039
+# posture, pointed at citations). Quotes are wrapped by the AUTHOR, so unlike
+# anchor containment this normalizes whitespace runs and curly quotes — the
+# line-wrap is authoring, not content.
+# --------------------------------------------------------------------------- #
+_QUOTE_MIN_CHARS = 15
+_QUOTE_SPAN_RE = re.compile(r'["\u201c]([^"\u201c\u201d]+)["\u201d]')
+_CITE_ID_RE = re.compile(r'\[(src-[A-Za-z0-9][A-Za-z0-9-]*)\]')
+
+
+def _quote_norm(s: str) -> str:
+    s = (s.replace("\u201c", '"').replace("\u201d", '"')
+          .replace("\u2018", "'").replace("\u2019", "'"))
+    return " ".join(s.split())
+
+
+# A line that OPENS a new authored unit: a list item, a heading, a table row, a
+# blockquote, or a fence. Anything else continues the unit above it.
+_UNIT_OPENER_RE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|\||>|```)")
+
+
+def _logical_lines(body):
+    """Join hard-wrapped continuation lines back into the unit the author wrote.
+
+    The gate scans a unit for quotes and the citations that vouch for them, so
+    what counts as "a line" decides what it can see. Scanning raw newlines made
+    the gate **bypassable by formatting**: a quote wrapped across two lines, or a
+    citation pushed onto the next line, put the two in different scan units and
+    nothing was checked at all \u2014 `checked` came back 0 and the write sailed
+    through. The identical fabricated span was refused unwrapped and accepted
+    wrapped (proved 2026-08-02 on a live regenerate pass, where ten summaries
+    scored `checked=0` and, once visible, nine of their quotes turned out not to
+    be verbatim). T-221 rule 4 makes the split routine rather than rare, because
+    it puts the citation at the END of a sentence that may well wrap.
+
+    The comment above already holds that "the line-wrap is authoring, not
+    content" \u2014 this applies that to the scan, not only to the span.
+
+    Joining is deliberately narrow: only *continuation* lines merge. A new list
+    item, heading, table row, blockquote, or fence still starts a fresh unit, so
+    one bullet's citation cannot vouch for a neighbouring bullet's quote. That
+    keeps the precision the line scan had, and buys back only what wrapping lost.
+    """
+    units, cur = [], []
+    for line in body.split("\n"):
+        if not line.strip():                     # blank line ends a unit
+            if cur:
+                units.append(" ".join(cur))
+                cur = []
+            continue
+        if _UNIT_OPENER_RE.match(line) and cur:  # a new unit starts here
+            units.append(" ".join(cur))
+            cur = []
+        cur.append(line.strip())
+    if cur:
+        units.append(" ".join(cur))
+    return units
+
+
+def verify_quoted_spans(root, body, source_ids):
+    """Every ≥15-char double-quoted span in an authored unit that also cites a
+    provenance source must be contained (whitespace-normalized) in at least one
+    of that unit's cited sources' text. Returns (checked, problems) — problems is
+    [(span_preview, cited_ids)]. Units citing non-provenance ids are ignored
+    (the I3 check owns those); short quotes are ignored (incidental phrases).
+
+    A unit is what the author wrote, not what the wrapper emitted: see
+    `_logical_lines`. Scanning raw newlines let formatting decide whether the
+    gate ran at all, which made it bypassable rather than merely narrow.
+
+    Still deliberately NARROW on precision: a false refusal blocks an honest
+    write, so a span is satisfied by ANY source its unit cites. What is no longer
+    true is the old rationale that "a missed quote costs nothing" — a quote
+    missed because of line-wrap was a quote nobody ever verified."""
+    root = Path(root)
+    source_ids = set(source_ids)
+    cache: dict = {}
+    checked, problems = 0, []
+    for line in _logical_lines(body):
+        cites = [c for c in _CITE_ID_RE.findall(line) if c in source_ids]
+        if not cites:
+            continue
+        for m in _QUOTE_SPAN_RE.finditer(line):
+            span = _quote_norm(m.group(1))
+            if len(span) < _QUOTE_MIN_CHARS:
+                continue
+            for sid in cites:
+                if sid not in cache:
+                    sdir = root / "sources" / sid
+                    cache[sid] = _quote_norm(
+                        muninn_lint.source_text(sdir, _load_yaml(sdir / "meta.yml")))
+            # A source with NO text layer cannot verify anything: a bytes-only
+            # capture with no registered extractor, or a reference-tier locator.
+            # Unverifiable is not fabricated (T-142's "a miss is not absence",
+            # pointed at the write seam), and refusing here would block honest
+            # writes about exactly the sources that most need quoting. Skip the
+            # span rather than fail it; the doc's own `model-read` stamp is what
+            # carries that assurance, and it is the linter's business, not this
+            # gate's.
+            checkable = [sid for sid in cites if cache[sid]]
+            if not checkable:
+                continue
+            checked += 1
+            ok = False
+            for sid in checkable:
+                if span in cache[sid]:
+                    ok = True
+                    break
+            if not ok:
+                problems.append((span[:80], cites))
+    return checked, problems
+
+
+@_locked
+def write_derived(root, id, *, body, sources, type="summary", title,
+                  abstract=None, status="current", see_also=None,
+                  derivation=None, derived_at=None, connectors=None,
+                  as_of=None):
+    """Write a derived document with provenance — the write half of derivation.
+
+    The adapter supplies judgment (title/abstract/body, and *which* sources);
+    Core writes the file, copying each source's CURRENT `content_hash` into the
+    provenance list (so the doc is born fresh, L4-clean), and enforces
+    grounding-in-sources-only at the boundary: a provenance id that is not a real
+    source raises ValueError (I3 — no chaining). Atomic single-file write.
+
+    Returns {"id", "type", "path", "sources"}.
+    """
+    root = Path(root)
+    _valid_id(id, what="derived-doc id")
+    derived_at = derived_at or util._now()
+    if type not in _TYPE_DIR:
+        raise ValueError(f"unknown derived type {type!r}")
+    if not sources:
+        raise ValueError("a derived document needs at least one source (I2)")
+    if derivation is not None and derivation not in muninn_lint.DERIVATION_VALUES:
+        raise ValueError(f"derivation {derivation!r} not one of "
+                         f"{' | '.join(sorted(muninn_lint.DERIVATION_VALUES))} (L14)")
+
+    prov = []
+    for sid in sources:
+        meta_p = root / "sources" / sid / "meta.yml"
+        if not meta_p.exists():
+            raise ValueError(
+                f"provenance id {sid!r} is not a source — derivation must be grounded "
+                f"only in sources (I3, no chaining)")
+        prov.append({"id": sid, "hash": _load_yaml(meta_p).get("content_hash")})
+
+    # A summary is gated on RE-DERIVE but not on first authoring (T-223).
+    # The exclusion exists to protect bulk ingest, the lower-supervision path
+    # (ADR-0007) where a refusal blocks the flagship verb on an inexact quote.
+    # A re-derive is the opposite situation: the doc already exists, so a human
+    # asked for this write and is watching it. That is where the check earns its
+    # keep, and it is the case T-221's regenerate pass actually exercises --
+    # rule 4 drives quote and citation density into summaries, and the live base
+    # already held one carrying 11 spans absent from its cited source.
+    # Deterministic and stateless: the doc's own file is the signal.
+    is_rederive = (root / _TYPE_DIR[type] / f"{id}.md").exists()
+    if type in _QUOTE_GATED_TYPES or (type == "summary" and is_rederive):
+        # T-153(d): an insight is the least deterministic derivation — its
+        # claimed verbatim quotes are the evidence the write seam CAN verify.
+        # T-177 widens the gate to the map products (entity/concept/question):
+        # they are approved from a manifest skim, so the per-doc evidence must
+        # hold without the user re-reading every source. Summaries keep their
+        # current seam (out of T-177's scope).
+        _, problems = verify_quoted_spans(root, body, sources)
+        if problems:
+            detail = "; ".join(f'"{s}…" cited to {", ".join(c)}' for s, c in problems[:3])
+            raise ValueError(
+                f"quoted span(s) not found in the cited source(s) (T-153): {detail} — "
+                f"a verbatim quote must appear in the source's text; re-read the "
+                f"source and quote it exactly, or cite the source that states it "
+                f"(whitespace and smart/straight quotes are normalized for you, but "
+                f"markdown syntax like ** or `, punctuation, and letter case are "
+                f"literal source bytes you must reproduce)")
+
+    fm = {"id": id, "type": type, "title": title}
+    # ADR-0051: authorship is structural, by doc type - derived prose is the
+    # adapter's voice, and the field makes that legible at a glance (the
+    # type->authority mapping is exactly the context readers flatten). Written
+    # by the Core from the op itself, never authored; L26 (advisory) keeps a
+    # present value coherent with the type. Optional-additive (ADR-0037).
+    fm["authored_by"] = "adapter"
+    if abstract:
+        fm["abstract"] = abstract
+    fm["sources"] = prov
+    fm["derived_at"] = derived_at
+    # A doc that states a TIME-RELATIVE result (ADR-0034 / T-104) declares the date
+    # its claim was true. It is surfaced/aged on-load by `status`, NOT by lint (which
+    # stays time-independent, ADR-0005). The authoring default is still to anchor on the
+    # immutable datum + derivation rule so no as_of is needed; this is the residual.
+    if as_of:
+        fm["as_of"] = as_of
+    if see_also:
+        fm["see_also"] = see_also
+    # A landscape doc may ASSERT connectors it references but hasn't ingested from
+    # (ADR-0028 / ADR-0021 §2) — an adapter-authored `[{system, ref}]` list. Ingested
+    # connectors need not be listed here; they come free from source `origin` in the
+    # connector projection. Not self-hashed content (a machine/landscape field).
+    if connectors:
+        fm["connectors"] = [c for c in connectors if isinstance(c, dict) and c.get("system")]
+    fm["status"] = status
+    if derivation:
+        fm["derivation"] = derivation
+    # Always stamp a self-hash over the authored content (ADR-0029): cheap, always-accurate
+    # metadata that every write (incl. `regenerate`) keeps current. The muninn.yml
+    # `integrity.derived_self_hash` flag governs only whether the linter ENFORCES it (L19).
+    # Decoupling stamp from enforce makes enabling enforcement later instant and complete —
+    # every doc is already stamped — and never false-positives on a legit regenerate.
+    fm["self_hash"] = muninn_lint.derived_content_hash(title, abstract, body)
+
+    body_text = body if body.endswith("\n") else body + "\n"
+    doc_text = "---\n" + _dump_yaml(fm) + "---\n" + body_text
+
+    ddir = root / _TYPE_DIR[type]
+    ddir.mkdir(exist_ok=True)
+    target = ddir / f"{id}.md"
+    # A superseded doc is a CLOSED record (ADR-0041): writing new content over
+    # it would silently resurrect it. Derive under a new id, or lift first.
+    if target.exists():
+        existing_fm, _ = util._read_doc(target)
+        if existing_fm.get("status") == "superseded":
+            raise ValueError(
+                f"'{id}' is superseded (a closed record) — derive under a new id, "
+                f"or `supersede {id} --lift` first if the supersession itself was "
+                f"the mistake (ADR-0041)")
+    tmp = ddir / f".{id}.md.tmp"
+    tmp.write_text(doc_text, encoding="utf-8")
+    atomic_replace(tmp, target)  # atomic replace into place
+    _append_log(root, derived_at, f"derive | {type} | {id} <- {', '.join(sources)}")
+    return {"id": id, "type": type, "path": str(target),
+            "sources": [p["id"] for p in prov]}
+
+
+# --------------------------------------------------------------------------- #
+# supersede — the honest ending of a derived doc (ADR-0041, T-063)
+# --------------------------------------------------------------------------- #
+_SUPERSEDE_FIELDS = ("superseded_by", "superseded_at", "supersede_reason")
+
+
+def _derived_doc_path(root, id):
+    """The on-disk file of a derived doc by id, or None. Derived dirs only —
+    supersede's scope guard rides on this (sources/decisions/projects excluded)."""
+    for dirname in _TYPE_DIR.values():
+        p = root / dirname / f"{id}.md"
+        if p.exists():
+            return p
+    return None
+
+
+@_locked
+def supersede(root, id, *, by=None, reason=None, lift=False):
+    """Mark a derived document superseded — or lift a mistaken mark (ADR-0041).
+
+    The honest ending the Core previously lacked: `status: superseded` +
+    `superseded_by` (one-way pointer, on the ended doc) + `superseded_at` +
+    `supersede_reason`. At least one of by/reason is required (an ending has a
+    successor or an explanation). Touches ONLY these machine fields: bytes,
+    provenance, and authored content are untouched, so `self_hash` (L19) stays
+    valid and every provenance re-verification still passes. Consented, logged,
+    idempotent, atomic. Scope: derived docs only — sources are immutable and
+    versioned (ending one is retention policy, T-046); decisions have their own
+    immutable-by-supersession mechanism; candidates have `decline`.
+
+    `lift=True` reverses a mistaken supersession (status back to `current`,
+    fields removed, logged) — the consented path back that keeps the hand-edit
+    temptation dead (the `retier --recoverable` precedent).
+    """
+    root = Path(root)
+    p = _derived_doc_path(root, id)
+    if p is None:
+        if (root / "sources" / id).exists():
+            raise ValueError(f"'{id}' is a source — sources are immutable and "
+                             f"versioned, never superseded (retention is T-046)")
+        if (root / "decisions" / f"{id}.md").exists():
+            raise ValueError(f"'{id}' is a decision — decisions supersede via "
+                             f"their own record (ADR-0000), not this op")
+        raise ValueError(f"no derived document '{id}'")
+    fm, body = util._read_doc(p)
+
+    if lift:
+        if fm.get("status") != "superseded":
+            return {"id": id, "status": fm.get("status"), "changed": False}
+        fm["status"] = "current"
+        for f in _SUPERSEDE_FIELDS:
+            fm.pop(f, None)
+        _rewrite_doc(p, fm, body)
+        _append_log(root, util._now(), f"supersede | lifted | {id}")
+        return {"id": id, "status": "current", "changed": True}
+
+    if not by and not (reason or "").strip():
+        raise ValueError("supersede needs --by (the replacement id) and/or "
+                         "--reason (why this doc is ended)")
+    if by is not None:
+        if by == id:
+            raise ValueError("a document cannot supersede itself")
+        by_exists = (_derived_doc_path(root, by) is not None
+                     or (root / "decisions" / f"{by}.md").exists())
+        if not by_exists:
+            raise ValueError(f"superseded_by '{by}' resolves to nothing — the "
+                             f"replacement must exist first (record it, then "
+                             f"supersede the original)")
+
+    if (fm.get("status") == "superseded"
+            and fm.get("superseded_by") == by
+            and fm.get("supersede_reason") == reason):
+        return {"id": id, "status": "superseded", "changed": False}
+
+    when = util._now()
+    fm["status"] = "superseded"
+    if by is not None:
+        fm["superseded_by"] = by
+    fm["superseded_at"] = when
+    if reason:
+        fm["supersede_reason"] = reason
+    _rewrite_doc(p, fm, body)
+    note = f" -> {by}" if by else ""
+    _append_log(root, when, f"supersede | {id}{note}"
+                            + (f" ({reason})" if reason else ""))
+    return {"id": id, "status": "superseded", "superseded_by": by,
+            "superseded_at": when, "changed": True}
+
+
+def _rewrite_doc(p, fm, body):
+    body_text = body if body.endswith("\n") else body + "\n"
+    tmp = p.with_name(f".{p.name}.tmp")
+    tmp.write_text("---\n" + _dump_yaml(fm) + "---\n" + body_text, encoding="utf-8")
+    atomic_replace(tmp, p)
+
+
+# --------------------------------------------------------------------------- #
+# challenge-log — the outcome history of a consented challenge (ADR-0040)
+# --------------------------------------------------------------------------- #
+CHALLENGE_OUTCOMES = ("survived", "weakened", "refuted")
+
+
+def log_challenge(root, target, *, outcome, detail=None):
+    """Record a completed **challenge** in the append-only log (ADR-0040 §5,
+    the drift-log precedent): history a reader can consult ("this claim has
+    been stress-tested, on these dates"), never a verdict the format stores.
+    Deliberately NO doc mark, NO status field, NO trust score — skepticism is
+    an operation, not a format axis. `target` is the challenged doc's id (or a
+    short claim slug when the challenge tested a claim not yet written down).
+    """
+    if not (target or "").strip():
+        raise ValueError("challenge-log needs the challenged target (doc id or claim slug)")
+    if outcome not in CHALLENGE_OUTCOMES:
+        raise ValueError(f"outcome must be one of {' | '.join(CHALLENGE_OUTCOMES)}, "
+                         f"got {outcome!r}")
+    root = Path(root)
+    when = util._now()
+    line = f"challenge | {target}: {outcome}"
+    if detail:
+        line += f" | {detail}"
+    _append_log(root, when, line)
+    return {"target": target, "outcome": outcome, "logged_at": when}
+
+
+# --------------------------------------------------------------------------- #
+# review-log — the honesty audit's memory (T-216; the challenge-log precedent)
+# --------------------------------------------------------------------------- #
+REVIEW_OUTCOMES = ("clean", "findings-surfaced")
+
+
+def log_review(root, *, scope=None, outcome, detail=None):
+    """Record a completed **review** pass in the append-only log — the lane
+    `review` lacked, which is why adapters hand-wrote `review` entries into
+    `log.md` (found 2026-08-01, unnoticed for two weeks; T-215/L23).
+
+    Same posture as `challenge-log` (ADR-0040 §5): history a reader can consult
+    ("this scope was re-read adversarially, on these dates"), never a verdict
+    the format stores. Deliberately **NO doc mark, NO status field, NO trust
+    score** — an AI blessing rots and invites false trust (ADR-0014), so the
+    durable audit stays provenance you can re-hash. `review` therefore still
+    writes nothing to the *knowledge*: this appends one line to the operations
+    log, exactly as `challenge`/`map`/`drift-check` do.
+
+    `outcome` is deliberately qualitative, never a count: ADR-0026 forbids
+    deterministic-looking finding tallies, since apeing the linter launders
+    judgment as fact. And `clean` records what a pass *reported*, never a
+    warranty — re-reading the sources is always the arbiter.
+    """
+    if outcome not in REVIEW_OUTCOMES:
+        raise ValueError(f"outcome must be one of {' | '.join(REVIEW_OUTCOMES)}, "
+                         f"got {outcome!r}")
+    root = Path(root)
+    scope = (str(scope).strip() if scope else "") or "base"
+    when = util._now()
+    line = f"review | scope={scope}: {outcome}"
+    if detail:
+        line += f" | {detail}"
+    _append_log(root, when, line)
+    return {"scope": scope, "outcome": outcome, "logged_at": when}
+
+
+# --------------------------------------------------------------------------- #
+# map-log — the enrichment pass's memory (ADR-0043, T-177)
+# --------------------------------------------------------------------------- #
+def log_map(root, *, scope=None, entities=None, concepts=None, questions=None,
+            detail=None):
+    """Record a completed **map** pass in the append-only log (the drift-log
+    precedent). The log is the pass's memory: `status` reads the latest entry
+    for `last_map` and counts captures arriving after it (`captures_since_map`)
+    — the deterministic enrichment-debt facts behind the on-load offer
+    (ADR-0043). A pass that wrote nothing still logs: "checked, nothing
+    warranted" is information the next session should not re-derive.
+    """
+    root = Path(root)
+    scope = (str(scope).strip() if scope else "") or "base"
+    e, c, q = int(entities or 0), int(concepts or 0), int(questions or 0)
+    line = f"map | scope={scope} entities={e} concepts={c} questions={q}"
+    if detail:
+        line += f" | {detail}"
+    when = util._now()
+    _append_log(root, when, line)
+    return {"logged_at": when, "scope": scope,
+            "entities": e, "concepts": c, "questions": q}
